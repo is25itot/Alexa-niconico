@@ -12,7 +12,7 @@ from utils import create_presigned_url  # テンプレートに入っているS3
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-AUDIO_KEY = "Media/audio.mp3"   # S3に置いたファイル
+AUDIO_KEY = "Media/test.mp3"   # S3に置いたファイル
 TRACK_TOKEN = "track-001"       # 曲を識別する文字列(後でキュー管理に使う)
 
 
@@ -37,6 +37,14 @@ def play_audio(handler_input, speech):
 class LaunchRequestHandler(AbstractRequestHandler):
     def can_handle(self, handler_input):
         return is_request_type("LaunchRequest")(handler_input)
+
+    def handle(self, handler_input):
+        return play_audio(handler_input, "再生します。")
+
+
+class PlayMusicIntentHandler(AbstractRequestHandler):
+    def can_handle(self, handler_input):
+        return is_intent_name("PlayMusicIntent")(handler_input)
 
     def handle(self, handler_input):
         return play_audio(handler_input, "再生します。")
@@ -98,6 +106,7 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
 
 sb = SkillBuilder()
 sb.add_request_handler(LaunchRequestHandler())
+sb.add_request_handler(PlayMusicIntentHandler())
 sb.add_request_handler(ResumeIntentHandler())
 sb.add_request_handler(StopHandler())
 sb.add_request_handler(AudioPlayerEventHandler())
