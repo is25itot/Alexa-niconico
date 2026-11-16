@@ -95,7 +95,7 @@
                     "name": "SONG_TITLE",
                     "values": [
                         {
-                            "id": "test",
+                            "id": "test1",
                             "name": {
                                 "value": "テスト1",
                                 "synonyms": [
@@ -121,6 +121,36 @@
                                 "synonyms": [
                                     "テストさん",
                                     "テスト三"
+                                ]
+                            }
+                        },
+                        {
+                            "id": "test4",
+                            "name": {
+                                "value": "テスト4",
+                                "synonyms": [
+                                    "テストよん",
+                                    "テスト四"
+                                ]
+                            }
+                        },
+                        {
+                            "id": "test5",
+                            "name": {
+                                "value": "テスト5",
+                                "synonyms": [
+                                    "テストご",
+                                    "テスト五"
+                                ]
+                            }
+                        },
+                        {
+                            "id": "test6",
+                            "name": {
+                                "value": "テスト6",
+                                "synonyms": [
+                                    "テストろく",
+                                    "テスト六"
                                 ]
                             }
                         }
