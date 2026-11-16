@@ -3,11 +3,9 @@ import logging
 import boto3
 
 from ask_sdk_core.skill_builder import SkillBuilder
-from ask_sdk_core.dispatch_components import (
-    AbstractRequestHandler, AbstractExceptionHandler)
+from ask_sdk_core.dispatch_components import (AbstractRequestHandler, AbstractExceptionHandler)
 from ask_sdk_core.utils import is_request_type, is_intent_name
-from ask_sdk_model.interfaces.audioplayer import (
-    PlayDirective, PlayBehavior, AudioItem, Stream, StopDirective)
+from ask_sdk_model.interfaces.audioplayer import (PlayDirective, PlayBehavior, AudioItem, Stream, StopDirective)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
