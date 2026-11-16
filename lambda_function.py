@@ -9,7 +9,7 @@ import boto3
 from ask_sdk_core.skill_builder import SkillBuilder
 from ask_sdk_core.dispatch_components import (
     AbstractRequestHandler, AbstractExceptionHandler)
-from ask_sdk_core.utils import is_request_type, is_intent_name, get_slot
+from ask_sdk_core.utils import is_request_type, is_intent_name
 from ask_sdk_model.interfaces.audioplayer import (
     PlayDirective, PlayBehavior, AudioItem, Stream, StopDirective)
 
@@ -159,7 +159,9 @@ def play_track(handler_input, speech, song_id, offset=0):
 
 def resolve_song_id(handler_input):
     """スロット(曲名)から曲idを取り出す。見つからなければ None"""
-    slot = get_slot(handler_input, "songTitle")
+    slots = handler_input.request_envelope.request.intent.slots or {}
+    slot = slots.get("songTitle")
+    logger.info("songTitle slot: %s", slot)   # 原因調査のため、中身をログに出す
     try:
         for auth in slot.resolutions.resolutions_per_authority:
             code = getattr(auth.status.code, "value", auth.status.code)
