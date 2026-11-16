@@ -21,9 +21,12 @@ logger.setLevel(logging.INFO)
 # 曲リスト(idは英数字のみ。"." は使わない。対話モデルのスロット値のidと一致させる)
 # ---------------------------------------------------------------
 LIBRARY = [
-    {"id": "test",  "key": "Media/test.mp3",  "title": "テスト1","aliases": ["テストいち", "テスト一"]},
+    {"id": "test1",  "key": "Media/test1.mp3",  "title": "テスト1","aliases": ["テストいち", "テスト一"]},
     {"id": "test2", "key": "Media/test2.mp3", "title": "テスト2","aliases": ["テストに", "テスト二"]},
     {"id": "test3", "key": "Media/test3.mp3", "title": "テスト3","aliases": ["テストさん", "テスト三"]},
+    {"id": "test4", "key": "Media/test4.mp3", "title": "テスト4","aliases": ["テストよん", "テスト四"]},
+    {"id": "test5", "key": "Media/test5.mp3", "title": "テスト5","aliases": ["テストご", "テスト五"]},
+    {"id": "test6", "key": "Media/test6.mp3", "title": "テスト6","aliases": ["テストろく", "テスト六"]},
 ]
 SONGS = {s["id"]: s for s in LIBRARY}
 SONG_IDS = [s["id"] for s in LIBRARY]
