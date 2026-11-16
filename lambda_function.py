@@ -42,6 +42,14 @@ class LaunchRequestHandler(AbstractRequestHandler):
         return play_audio(handler_input, "再生します。")
 
 
+class PlayMusicIntentHandler(AbstractRequestHandler):
+    def can_handle(self, handler_input):
+        return is_intent_name("PlayMusicIntent")(handler_input)
+
+    def handle(self, handler_input):
+        return play_audio(handler_input, "再生します。")
+
+
 class ResumeIntentHandler(AbstractRequestHandler):
     def can_handle(self, handler_input):
         return is_intent_name("AMAZON.ResumeIntent")(handler_input)
@@ -98,6 +106,7 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
 
 sb = SkillBuilder()
 sb.add_request_handler(LaunchRequestHandler())
+sb.add_request_handler(PlayMusicIntentHandler())
 sb.add_request_handler(ResumeIntentHandler())
 sb.add_request_handler(StopHandler())
 sb.add_request_handler(AudioPlayerEventHandler())
