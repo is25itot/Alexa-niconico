@@ -35,7 +35,11 @@ s3_client = boto3.client(
     "s3",
     region_name=os.environ.get("S3_PERSISTENCE_REGION"),
     config=boto3.session.Config(
-        signature_version="s3v4", s3={"addressing_style": "path"}))
+        signature_version="s3v4",
+        s3={"addressing_style": "path"},
+        connect_timeout=2,
+        read_timeout=3,
+        retries={"max_attempts": 1}))
 
 
 def create_long_presigned_url(object_name, expires=3600):
