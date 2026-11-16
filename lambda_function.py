@@ -88,11 +88,9 @@ class ResumeIntentHandler(AbstractRequestHandler):
         return is_intent_name("AMAZON.ResumeIntent")(handler_input)
 
     def handle(self, handler_input):
-        # 止めた曲と位置が分かれば、そこから再開する(分からなければ1曲目の最初から)
         audio = handler_input.request_envelope.context.audio_player
-        index = parse_index(audio.token) if audio and audio.token else 0
         offset = (audio.offset_in_milliseconds or 0) if audio else 0
-        return play_track(handler_input, "再開します。", index, offset)
+        return play_track(handler_input, "再開します。", current_index(handler_input), offset)
 
 
 def current_index(handler_input):
