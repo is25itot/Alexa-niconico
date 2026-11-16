@@ -1,0 +1,130 @@
+{
+    "interactionModel": {
+        "languageModel": {
+            "invocationName": "ニコプレーヤー",
+            "intents": [
+                {
+                    "name": "AMAZON.CancelIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.HelpIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.StopIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.NavigateHomeIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.PauseIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.ResumeIntent",
+                    "samples": []
+                },
+                {
+                    "name": "PlayMusicIntent",
+                    "slots": [],
+                    "samples": [
+                        "何か流して",
+                        "音楽を再生して",
+                        "曲を流して",
+                        "音楽をかけて"
+                    ]
+                },
+                {
+                    "name": "AMAZON.NextIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.PreviousIntent",
+                    "samples": []
+                },
+                {
+                    "name": "PlaySongIntent",
+                    "slots": [
+                        {
+                            "name": "songTitle",
+                            "type": "SONG_TITLE"
+                        }
+                    ],
+                    "samples": [
+                        "{songTitle} をかけて",
+                        "{songTitle} を流して",
+                        "{songTitle} を再生して",
+                        "{songTitle} を聞きたい"
+                    ]
+                },
+                {
+                    "name": "LoopOneIntent",
+                    "slots": [],
+                    "samples": [
+                        "一曲ループして",
+                        "一曲リピート",
+                        "いっきょくループして",
+                        "この曲をリピートして",
+                        "この曲を繰り返して"
+                    ]
+                },
+                {
+                    "name": "AMAZON.ShuffleOnIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.ShuffleOffIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.LoopOnIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.LoopOffIntent",
+                    "samples": []
+                }
+            ],
+            "types": [
+                {
+                    "name": "SONG_TITLE",
+                    "values": [
+                        {
+                            "id": "test",
+                            "name": {
+                                "value": "テスト1",
+                                "synonyms": [
+                                    "テストいち",
+                                    "テスト一"
+                                ]
+                            }
+                        },
+                        {
+                            "id": "test2",
+                            "name": {
+                                "value": "テスト2",
+                                "synonyms": [
+                                    "テストに",
+                                    "テスト二"
+                                ]
+                            }
+                        },
+                        {
+                            "id": "test3",
+                            "name": {
+                                "value": "テスト3",
+                                "synonyms": [
+                                    "テストさん",
+                                    "テスト三"
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+}
