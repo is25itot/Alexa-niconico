@@ -12,7 +12,7 @@ from utils import create_presigned_url  # テンプレートに入っているS3
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-AUDIO_KEY = "Media/audio.mp3"   # S3に置いたファイル
+AUDIO_KEY = "Media/test.mp3"   # S3に置いたファイル
 TRACK_TOKEN = "track-001"       # 曲を識別する文字列(後でキュー管理に使う)
 
 
