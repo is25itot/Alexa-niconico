@@ -5,6 +5,7 @@ import uuid
 import hashlib
 import logging
 import boto3
+import unicodedata
 
 from ask_sdk_core.skill_builder import SkillBuilder
 from ask_sdk_core.dispatch_components import (
@@ -20,9 +21,9 @@ logger.setLevel(logging.INFO)
 # 曲リスト(idは英数字のみ。"." は使わない。対話モデルのスロット値のidと一致させる)
 # ---------------------------------------------------------------
 LIBRARY = [
-    {"id": "test",  "key": "Media/test.mp3",  "title": "テスト1"},
-    {"id": "test2", "key": "Media/test2.mp3", "title": "テスト2"},
-    {"id": "test3", "key": "Media/test3.mp3", "title": "テスト3"},
+    {"id": "test",  "key": "Media/test.mp3",  "title": "テスト1","aliases": ["テストいち", "テスト一"]},
+    {"id": "test2", "key": "Media/test2.mp3", "title": "テスト2","aliases": ["テストに", "テスト二"]},
+    {"id": "test3", "key": "Media/test3.mp3", "title": "テスト3","aliases": ["テストさん", "テスト三"]},
 ]
 SONGS = {s["id"]: s for s in LIBRARY}
 SONG_IDS = [s["id"] for s in LIBRARY]
@@ -161,15 +162,30 @@ def play_track(handler_input, speech, song_id, offset=0):
     )
 
 
+def normalize(text):
+    """スペースを取り除き、全角・半角をそろえる(「テスト 2」→「テスト2」)"""
+    return "".join(unicodedata.normalize("NFKC", text or "").split()).lower()
+
+
 def resolve_song_id(handler_input):
     """スロット(曲名)から曲idを取り出す。見つからなければ None"""
     slots = handler_input.request_envelope.request.intent.slots or {}
     slot = slots.get("songTitle")
-    logger.info("songTitle slot: %s", slot)   # 原因調査のため、中身をログに出す
+    spoken = normalize(slot.value) if slot else ""
+    logger.info("songTitle: %r -> %r", slot.value if slot else None, spoken)
+
+    # 1) 聞き取った言葉が、曲名または別名と一致する曲を探す
+    if spoken:
+        for song in LIBRARY:
+            names = [song["title"]] + song.get("aliases", [])
+            if spoken in [normalize(n) for n in names]:
+                return song["id"]
+
+    # 2) 一致しなければ、Alexaの解決結果が1件だけのときに採用する
     try:
         for auth in slot.resolutions.resolutions_per_authority:
             code = getattr(auth.status.code, "value", auth.status.code)
-            if code == "ER_SUCCESS_MATCH":
+            if code == "ER_SUCCESS_MATCH" and len(auth.values) == 1:
                 return auth.values[0].value.id
     except AttributeError:
         pass
