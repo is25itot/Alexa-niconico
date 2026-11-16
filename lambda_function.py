@@ -55,9 +55,11 @@ def build_play_directive(index, behavior, previous_token=None, offset=0):
 
 
 def play_track(handler_input, speech, index=0, offset=0):
+    builder = handler_input.response_builder
+    if speech:
+        builder.speak(speech)
     return (
-        handler_input.response_builder
-        .speak(speech)
+        builder
         .add_directive(build_play_directive(
             index, PlayBehavior.REPLACE_ALL, offset=offset))
         .set_should_end_session(True)
@@ -91,6 +93,30 @@ class ResumeIntentHandler(AbstractRequestHandler):
         index = parse_index(audio.token) if audio and audio.token else 0
         offset = (audio.offset_in_milliseconds or 0) if audio else 0
         return play_track(handler_input, "再開します。", index, offset)
+
+
+def current_index(handler_input):
+    """今再生している(していた)曲の番号。分からなければ0"""
+    audio = handler_input.request_envelope.context.audio_player
+    return parse_index(audio.token) if audio and audio.token else 0
+
+
+class NextIntentHandler(AbstractRequestHandler):
+    def can_handle(self, handler_input):
+        return is_intent_name("AMAZON.NextIntent")(handler_input)
+
+    def handle(self, handler_input):
+        next_index = (current_index(handler_input) + 1) % len(PLAYLIST)
+        return play_track(handler_input, None, next_index)
+
+
+class PreviousIntentHandler(AbstractRequestHandler):
+    def can_handle(self, handler_input):
+        return is_intent_name("AMAZON.PreviousIntent")(handler_input)
+
+    def handle(self, handler_input):
+        prev_index = (current_index(handler_input) - 1) % len(PLAYLIST)
+        return play_track(handler_input, None, prev_index)
 
 
 class StopHandler(AbstractRequestHandler):
