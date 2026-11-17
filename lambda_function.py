@@ -6,13 +6,12 @@ import hashlib
 import logging
 import boto3
 import unicodedata
+import datetime
 
 from ask_sdk_core.skill_builder import SkillBuilder
-from ask_sdk_core.dispatch_components import (
-    AbstractRequestHandler, AbstractExceptionHandler)
+from ask_sdk_core.dispatch_components import (AbstractRequestHandler, AbstractExceptionHandler, AbstractRequestInterceptor)
 from ask_sdk_core.utils import is_request_type, is_intent_name
-from ask_sdk_model.interfaces.audioplayer import (
-    PlayDirective, PlayBehavior, AudioItem, Stream, StopDirective)
+from ask_sdk_model.interfaces.audioplayer import (PlayDirective, PlayBehavior, AudioItem, Stream, StopDirective)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -366,7 +365,41 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
                 .speak("すみません、うまくいきませんでした。").response)
 
 
+def debug_log(message):
+    """届いたリクエストをS3の Debug/events.json に残す(直近40件)"""
+    key = "Debug/events.json"
+    try:
+        try:
+            lines = json.loads(s3_client.get_object(Bucket=BUCKET, Key=key)["Body"].read())
+        except Exception:
+            lines = []
+        lines.append("{} {}".format(
+            datetime.datetime.utcnow().isoformat(timespec="seconds"), message))
+        s3_client.put_object(
+            Bucket=BUCKET, Key=key,
+            Body=json.dumps(lines[-40:], ensure_ascii=False).encode("utf-8"))
+    except Exception as e:
+        logger.error("デバッグ記録に失敗: %s", e)
+
+
+class DebugInterceptor(AbstractRequestInterceptor):
+    def process(self, handler_input):
+        r = handler_input.request_envelope.request
+        parts = [r.object_type]
+        intent = getattr(r, "intent", None)
+        if intent:
+            parts.append(intent.name)
+        token = getattr(r, "token", None)
+        if token:
+            parts.append("token=" + token)
+        err = getattr(r, "error", None)
+        if err:
+            parts.append("error=" + str(err))
+        debug_log(" ".join(parts))
+
+
 sb = SkillBuilder()
+sb.add_global_request_interceptor(DebugInterceptor())
 sb.add_request_handler(StartPlaybackHandler())
 sb.add_request_handler(PlaySongIntentHandler())
 sb.add_request_handler(ResumeIntentHandler())
