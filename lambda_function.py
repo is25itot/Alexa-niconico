@@ -407,7 +407,8 @@ sb.add_request_handler(StopHandler())
 sb.add_request_handler(NextIntentHandler())
 sb.add_request_handler(PreviousIntentHandler())
 sb.add_request_handler(PlaybackModeHandler())
-sb.add_request_handler(NearlyFinishedHandler())   # 必ず AudioPlayerEventHandler より前に登録
+sb.add_request_handler(NearlyFinishedHandler())
+sb.add_request_handler(PlaybackFinishedHandler())    # 必ず AudioPlayerEventHandler より前に登録
 sb.add_request_handler(AudioPlayerEventHandler())
 sb.add_request_handler(SessionEndedRequestHandler())
 sb.add_exception_handler(CatchAllExceptionHandler())
