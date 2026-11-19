@@ -1,9 +1,12 @@
 import os
+import json
+import datetime
 import logging
 import boto3
 
 from ask_sdk_core.skill_builder import SkillBuilder
-from ask_sdk_core.dispatch_components import (AbstractRequestHandler, AbstractExceptionHandler)
+from ask_sdk_core.dispatch_components import (
+    AbstractRequestHandler, AbstractExceptionHandler, AbstractRequestInterceptor)
 from ask_sdk_core.utils import is_request_type, is_intent_name
 from ask_sdk_model.interfaces.audioplayer import (PlayDirective, PlayBehavior, AudioItem, Stream, StopDirective)
 
@@ -11,10 +14,15 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # 再生する曲のリスト(S3の Media/ に置いたファイル)
+# 当時の test.mp3 / test2.mp3 / test3.mp3 を、現在のファイル名に合わせた
 PLAYLIST = [
-    "Media/test.mp3",
+    "Media/test1.mp3",
     "Media/test2.mp3",
     "Media/test3.mp3",
+    "Media/test4.mp3",
+    "Media/test5.mp3",
+    "Media/test6.mp3",
+    "Media/test7.mp3",
 ]
 
 
@@ -67,6 +75,12 @@ def play_track(handler_input, speech, index=0, offset=0):
     )
 
 
+def current_index(handler_input):
+    """今再生している(していた)曲の番号。分からなければ0"""
+    audio = handler_input.request_envelope.context.audio_player
+    return parse_index(audio.token) if audio and audio.token else 0
+
+
 class LaunchRequestHandler(AbstractRequestHandler):
     def can_handle(self, handler_input):
         return is_request_type("LaunchRequest")(handler_input)
@@ -91,12 +105,6 @@ class ResumeIntentHandler(AbstractRequestHandler):
         audio = handler_input.request_envelope.context.audio_player
         offset = (audio.offset_in_milliseconds or 0) if audio else 0
         return play_track(handler_input, "再開します。", current_index(handler_input), offset)
-
-
-def current_index(handler_input):
-    """今再生している(していた)曲の番号。分からなければ0"""
-    audio = handler_input.request_envelope.context.audio_player
-    return parse_index(audio.token) if audio and audio.token else 0
 
 
 class NextIntentHandler(AbstractRequestHandler):
@@ -183,11 +191,57 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
                 .response)
 
 
+# ---------------------------------------------------------------
+# デバッグ用(当時のコードにはなかった追加分)
+# 届いたリクエストを S3 の Debug/events.json に残す(直近40件)
+# ---------------------------------------------------------------
+def debug_log(message):
+    key = "Debug/events.json"
+    bucket = os.environ.get("S3_PERSISTENCE_BUCKET")
+    try:
+        s3 = boto3.client(
+            "s3",
+            region_name=os.environ.get("S3_PERSISTENCE_REGION"),
+            config=boto3.session.Config(
+                signature_version="s3v4", s3={"addressing_style": "path"},
+                connect_timeout=2, read_timeout=3, retries={"max_attempts": 1}))
+        try:
+            lines = json.loads(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
+        except Exception:
+            lines = []
+        lines.append("{} {}".format(
+            datetime.datetime.utcnow().isoformat(timespec="seconds"), message))
+        s3.put_object(
+            Bucket=bucket, Key=key,
+            Body=json.dumps(lines[-40:], ensure_ascii=False).encode("utf-8"))
+    except Exception as e:
+        logger.error("デバッグ記録に失敗: %s", e)
+
+
+class DebugInterceptor(AbstractRequestInterceptor):
+    def process(self, handler_input):
+        r = handler_input.request_envelope.request
+        parts = [r.object_type]
+        intent = getattr(r, "intent", None)
+        if intent:
+            parts.append(intent.name)
+        token = getattr(r, "token", None)
+        if token:
+            parts.append("token=" + token)
+        err = getattr(r, "error", None)
+        if err:
+            parts.append("error=" + str(err))
+        debug_log(" ".join(parts))
+
+
 sb = SkillBuilder()
+sb.add_global_request_interceptor(DebugInterceptor())
 sb.add_request_handler(LaunchRequestHandler())
 sb.add_request_handler(PlayMusicIntentHandler())
 sb.add_request_handler(ResumeIntentHandler())
 sb.add_request_handler(StopHandler())
+sb.add_request_handler(NextIntentHandler())
+sb.add_request_handler(PreviousIntentHandler())
 sb.add_request_handler(NearlyFinishedHandler())   # 必ず AudioPlayerEventHandler より前に登録
 sb.add_request_handler(AudioPlayerEventHandler())
 sb.add_request_handler(SessionEndedRequestHandler())
