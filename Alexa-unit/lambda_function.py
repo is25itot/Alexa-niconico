@@ -26,6 +26,7 @@ LIBRARY = [
     {"id": "test4", "key": "Media/test4.mp3", "title": "テスト4","aliases": ["テストよん", "テスト四"]},
     {"id": "test5", "key": "Media/test5.mp3", "title": "テスト5","aliases": ["テストご", "テスト五"]},
     {"id": "test6", "key": "Media/test6.mp3", "title": "テスト6","aliases": ["テストろく", "テスト六"]},
+    {"id": "test7", "key": "Media/test7.mp3", "title": "テスト7","aliases": ["テストなな", "テスト七"]},
 ]
 SONGS = {s["id"]: s for s in LIBRARY}
 SONG_IDS = [s["id"] for s in LIBRARY]
