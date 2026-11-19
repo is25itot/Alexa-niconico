@@ -204,22 +204,11 @@ class StartPlaybackHandler(AbstractRequestHandler):
                 or is_intent_name("PlayMusicIntent")(handler_input))
 
     def handle(self, handler_input):
-        intent_name = handler_input.request_envelope.request.intent.name
-        key, value, speech = self.SETTINGS[intent_name]
         state = load_state(handler_input)
-        state[key] = value
-        song_id = current_song_id(handler_input)
-        if key == "shuffle":  # 今の曲を先頭にして、順番を作り直す
-            state["order"] = make_order(value, first=song_id)
+        state["order"] = make_order(state["shuffle"])
         save_state(handler_input, state)
-
-        builder = handler_input.response_builder.speak(speech)
-        audio = handler_input.request_envelope.context.audio_player
-        activity = getattr(audio.player_activity, "value", audio.player_activity) if audio else None
-        if song_id and activity == "PLAYING":
-            # 同じ曲を同じ位置から再開(予約済みの次の曲も破棄され、新設定で予約し直される)
-            builder.add_directive(build_play_directive(song_id, PlayBehavior.REPLACE_ALL, offset=audio.offset_in_milliseconds or 0))
-        return builder.set_should_end_session(True).response
+        speech = "シャッフルで再生します。" if state["shuffle"] else "再生します。"
+        return play_track(handler_input, speech, state["order"][0])
 
 
 class PlaySongIntentHandler(AbstractRequestHandler):
@@ -236,9 +225,7 @@ class PlaySongIntentHandler(AbstractRequestHandler):
         state = load_state(handler_input)
         state["order"] = make_order(state["shuffle"], first=song_id)
         save_state(handler_input, state)
-        return play_track(handler_input,
-                          "{}を再生します。".format(SONGS[song_id]["title"]),
-                          song_id)
+        return play_track(handler_input, "{}を再生します。".format(SONGS[song_id]["title"]), song_id)
 
 
 class ResumeIntentHandler(AbstractRequestHandler):
@@ -306,11 +293,20 @@ class PlaybackModeHandler(AbstractRequestHandler):
         key, value, speech = self.SETTINGS[intent_name]
         state = load_state(handler_input)
         state[key] = value
+        song_id = current_song_id(handler_input)
         if key == "shuffle":  # 今の曲を先頭にして、順番を作り直す
-            state["order"] = make_order(value, first=current_song_id(handler_input))
+            state["order"] = make_order(value, first=song_id)
         save_state(handler_input, state)
-        return (handler_input.response_builder
-                .speak(speech).set_should_end_session(True).response)
+
+        builder = handler_input.response_builder.speak(speech)
+        audio = handler_input.request_envelope.context.audio_player
+        activity = getattr(audio.player_activity, "value", audio.player_activity) if audio else None
+        if song_id and activity == "PLAYING":
+            # 同じ曲を同じ位置から再開(予約済みの次の曲も破棄され、新設定で予約し直される)
+            builder.add_directive(build_play_directive(
+                song_id, PlayBehavior.REPLACE_ALL,
+                offset=audio.offset_in_milliseconds or 0))
+        return builder.set_should_end_session(True).response
 
 
 class NearlyFinishedHandler(AbstractRequestHandler):
