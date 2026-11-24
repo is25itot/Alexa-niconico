@@ -503,6 +503,16 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
                 .speak("すみません、うまくいきませんでした。").response)
 
 
+class HelpHandler(AbstractRequestHandler):
+    def can_handle(self, handler_input):
+        return is_intent_name("AMAZON.HelpIntent")(handler_input)
+
+    def handle(self, handler_input):
+        return (handler_input.response_builder
+                .speak("曲名を言って再生したり、次の曲、シャッフル、ループなどを言えます。曲を流すときは、音楽をかけて、と言ってください。")
+                .set_should_end_session(False).response)
+
+
 def debug_log(message):
     """届いたリクエストをS3の Debug/events.json に残す(直近40件)"""
     key = "Debug/events.json"
