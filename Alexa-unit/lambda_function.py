@@ -195,6 +195,32 @@ def resolve_song_id(handler_input):
     return None
 
 
+GENERIC_WORDS = {"音楽", "曲", "何か", "なにか", "ミュージック", "おんがく"}
+
+
+def search_songs(query):
+    """キーワードに合う曲のidを、近い順に返す。
+    将来、サーバーで検索するときは、この関数を差し替える"""
+    q = normalize(query)
+    if not q:
+        return []
+    scored = []
+    for song in LIBRARY:
+        names = [normalize(n) for n in
+                [song["title"]] + song.get("aliases", []) + song.get("tags", [])]
+        if q in names:
+            score = 3          # 完全一致
+        elif any(q in n for n in names):
+            score = 2          # キーワードを含む
+        elif any(n and n in q for n in names):
+            score = 1          # 曲名がキーワードの中に含まれる
+        else:
+            continue
+        scored.append((score, song["id"]))
+    scored.sort(key=lambda x: -x[0])
+    return [sid for _, sid in scored]
+
+
 # ---------------------------------------------------------------
 # ハンドラ
 # ---------------------------------------------------------------
@@ -212,21 +238,49 @@ class StartPlaybackHandler(AbstractRequestHandler):
         return play_track(handler_input, speech, state["order"][0])
 
 
-class PlaySongIntentHandler(AbstractRequestHandler):
-    """「〇〇をかけて」"""
+class SearchPlayIntentHandler(AbstractRequestHandler):
+    """「○○を流して」→ キーワードで曲を探して再生する"""
     def can_handle(self, handler_input):
-        return is_intent_name("PlaySongIntent")(handler_input)
+        return is_intent_name("SearchPlayIntent")(handler_input)
 
     def handle(self, handler_input):
-        song_id = resolve_song_id(handler_input)
-        if song_id is None:
-            return (handler_input.response_builder
-                    .speak("その曲が見つかりませんでした。")
-                    .set_should_end_session(True).response)
+        slots = handler_input.request_envelope.request.intent.slots or {}
+        slot = slots.get("query")
+        query = slot.value if slot else None
+        logger.info("query: %r", query)
+        builder = handler_input.response_builder
+
+        if not query:
+            return (builder.speak("どの曲にしますか?")
+                    .ask("曲名を言ってください。")
+                    .set_should_end_session(False).response)
+
         state = load_state(handler_input)
-        state["order"] = make_order(state["shuffle"], first=song_id)
+
+        # 「音楽をかけて」のような一般的な言葉は、全曲再生にする
+        if normalize(query) in GENERIC_WORDS:
+            state["order"] = make_order(state["shuffle"])
+            save_state(handler_input, state)
+            return play_track(handler_input, "再生します。", state["order"][0])
+
+        hits = search_songs(query)
+        if not hits:
+            return (builder
+                    .speak("{}は見つかりませんでした。もう一度、曲名を言ってください。".format(query))
+                    .ask("曲名を言ってください。")
+                    .set_should_end_session(False).response)
+
+        # 見つかった曲を先頭に、残りの曲をそのあとに並べる
+        rest = [s for s in make_order(state["shuffle"]) if s not in hits]
+        state["order"] = hits + rest
         save_state(handler_input, state)
-        return play_track(handler_input, "{}を再生します。".format(SONGS[song_id]["title"]), song_id)
+
+        title = SONGS[hits[0]]["title"]
+        if len(hits) == 1:
+            speech = "{}を再生します。".format(title)
+        else:
+            speech = "{}曲見つかりました。{}から再生します。".format(len(hits), title)
+        return play_track(handler_input, speech, hits[0])
 
 
 class ResumeIntentHandler(AbstractRequestHandler):
@@ -398,7 +452,7 @@ class DebugInterceptor(AbstractRequestInterceptor):
 sb = SkillBuilder()
 sb.add_global_request_interceptor(DebugInterceptor())
 sb.add_request_handler(StartPlaybackHandler())
-sb.add_request_handler(PlaySongIntentHandler())
+sb.add_request_handler(SearchPlayIntentHandler())
 sb.add_request_handler(ResumeIntentHandler())
 sb.add_request_handler(StopHandler())
 sb.add_request_handler(NextIntentHandler())

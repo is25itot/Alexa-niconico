@@ -46,18 +46,22 @@
                     "samples": []
                 },
                 {
-                    "name": "PlaySongIntent",
+                    "name": "SearchPlayIntent",
                     "slots": [
                         {
-                            "name": "songTitle",
-                            "type": "SONG_TITLE"
+                            "name": "query",
+                            "type": "AMAZON.SearchQuery"
                         }
                     ],
                     "samples": [
-                        "{songTitle} をかけて",
-                        "{songTitle} を流して",
-                        "{songTitle} を再生して",
-                        "{songTitle} を聞きたい"
+                        "{query} をかけて",
+                        "{query} を流して",
+                        "{query} を再生して",
+                        "{query} を聞きたい",
+                        "曲を選んで",
+                        "曲を指定したい",
+                        "曲名を指定して",
+                        "好きな曲を選びたい"
                     ]
                 },
                 {
@@ -91,72 +95,39 @@
                 }
             ],
             "types": [
+            ]
+        },
+        "dialog": {
+            "delegationStrategy": "ALWAYS",
+            "intents": [
                 {
-                    "name": "SONG_TITLE",
-                    "values": [
+                    "name": "SearchPlayIntent",
+                    "confirmationRequired": false,
+                    "prompts": {},
+                    "slots": [
                         {
-                            "id": "test1",
-                            "name": {
-                                "value": "テスト1",
-                                "synonyms": [
-                                    "テストいち",
-                                    "テスト一"
-                                ]
-                            }
-                        },
-                        {
-                            "id": "test2",
-                            "name": {
-                                "value": "テスト2",
-                                "synonyms": [
-                                    "テストに",
-                                    "テスト二"
-                                ]
-                            }
-                        },
-                        {
-                            "id": "test3",
-                            "name": {
-                                "value": "テスト3",
-                                "synonyms": [
-                                    "テストさん",
-                                    "テスト三"
-                                ]
-                            }
-                        },
-                        {
-                            "id": "test4",
-                            "name": {
-                                "value": "テスト4",
-                                "synonyms": [
-                                    "テストよん",
-                                    "テスト四"
-                                ]
-                            }
-                        },
-                        {
-                            "id": "test5",
-                            "name": {
-                                "value": "テスト5",
-                                "synonyms": [
-                                    "テストご",
-                                    "テスト五"
-                                ]
-                            }
-                        },
-                        {
-                            "id": "test6",
-                            "name": {
-                                "value": "テスト6",
-                                "synonyms": [
-                                    "テストろく",
-                                    "テスト六"
-                                ]
+                            "name": "query",
+                            "type": "AMAZON.SearchQuery",
+                            "confirmationRequired": false,
+                            "elicitationRequired": true,
+                            "prompts": {
+                                "elicitation": "Elicit.Slot.SearchPlayIntent.query"
                             }
                         }
                     ]
                 }
             ]
-        }
-    }
+        },
+        "prompts": [
+            {
+                "id": "Elicit.Slot.SearchPlayIntent.query",
+                "variations": [
+                    {
+                        "type": "PlainText",
+                        "value": "どの曲にしますか?"
+                    }
+                ]
+            }
+        ]
+            }
 }
