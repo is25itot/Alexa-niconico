@@ -253,6 +253,11 @@ def resolve_song_id(handler_input):
 
 
 GENERIC_WORDS = {"音楽", "曲", "何か", "なにか", "ミュージック", "おんがく"}
+CANCEL_WORDS = {
+    "やめて", "やめる", "キャンセル", "中止", "ちゅうし",
+    "いいです", "もういいです", "もういい", "大丈夫", "だいじょうぶ",
+    "やっぱりいい", "やっぱりいいです", "やっぱりやめる", "やっぱりやめて",
+}
 
 
 def search_songs(query):
@@ -310,6 +315,10 @@ class SearchPlayIntentHandler(AbstractRequestHandler):
         logger.info("query: %r", query)
         builder = handler_input.response_builder
 
+        if query and normalize(query) in CANCEL_WORDS:
+            return (builder.speak("わかりました。")
+                    .set_should_end_session(True).response)
+
         if not query:
             return (builder.speak("どの曲にしますか?")
                     .ask("曲名を言ってください。")
@@ -364,9 +373,12 @@ class StopHandler(AbstractRequestHandler):
             "AMAZON.PauseIntent", "AMAZON.StopIntent", "AMAZON.CancelIntent"))
 
     def handle(self, handler_input):
-        return (handler_input.response_builder
-                .add_directive(StopDirective())
-                .set_should_end_session(True).response)
+        builder = handler_input.response_builder
+        session = handler_input.request_envelope.session
+        if session and not session.new:
+            # 聞き返しの途中での「キャンセル」。再生中の曲は止めない
+            return builder.speak("わかりました。").set_should_end_session(True).response
+        return builder.add_directive(StopDirective()).set_should_end_session(True).response
 
 
 class NextIntentHandler(AbstractRequestHandler):
