@@ -13,7 +13,8 @@ import datetime
 from ask_sdk_core.skill_builder import SkillBuilder
 from ask_sdk_core.dispatch_components import (AbstractRequestHandler, AbstractExceptionHandler, AbstractRequestInterceptor)
 from ask_sdk_core.utils import is_request_type, is_intent_name
-from ask_sdk_model.interfaces.audioplayer import (PlayDirective, PlayBehavior, AudioItem, Stream, StopDirective)
+from ask_sdk_model.interfaces.audioplayer import (PlayDirective, PlayBehavior, AudioItem, Stream, StopDirective, AudioItemMetadata)
+from ask_sdk_model.interfaces.display import Image, ImageInstance
 from ask_sdk_model import Intent, Slot
 from ask_sdk_model.dialog import ElicitSlotDirective
 
@@ -83,7 +84,9 @@ def _clean_library(raw):
         library.append({
             "id": song_id, "key": key, "title": title,
             "aliases": list(item.get("aliases", [])),
-            "tags": list(item.get("tags", []))})
+            "tags": list(item.get("tags", [])),
+            "subtitle": item.get("subtitle", ""),
+            "art": item.get("art")})
     return library
 
 
@@ -201,14 +204,30 @@ def current_song_id(handler_input):
     return parse_song_id(audio.token) if audio and audio.token else None
 
 
+def build_metadata(song_id):
+    song = SONGS[song_id]
+    image = None
+    if song.get("art"):
+        image = Image(
+            content_description=song["title"],
+            sources=[ImageInstance(url=create_long_presigned_url(song["art"]))])
+    return AudioItemMetadata(
+        title=song["title"],
+        subtitle=song.get("subtitle") or None,
+        art=image,
+        background_image=image)
+
+
 def build_play_directive(song_id, behavior, previous_token=None, offset=0):
     return PlayDirective(
         play_behavior=behavior,
-        audio_item=AudioItem(stream=Stream(
-            token=make_token(song_id),
-            url=create_long_presigned_url(SONGS[song_id]["key"]),
-            offset_in_milliseconds=offset,
-            expected_previous_token=previous_token)))
+        audio_item=AudioItem(
+            stream=Stream(
+                token=make_token(song_id),
+                url=create_long_presigned_url(SONGS[song_id]["key"]),
+                offset_in_milliseconds=offset,
+                expected_previous_token=previous_token),
+            metadata=build_metadata(song_id)))
 
 
 def play_track(handler_input, speech, song_id, offset=0):
