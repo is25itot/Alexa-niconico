@@ -221,12 +221,26 @@ class PlaySongIntentHandler(AbstractRequestHandler):
         song_id = resolve_song_id(handler_input)
         if song_id is None:
             return (handler_input.response_builder
-                    .speak("その曲が見つかりませんでした。")
-                    .set_should_end_session(True).response)
+                    .speak("その曲が見つかりませんでした。もう一度、曲名を言ってください。")
+                    .ask("曲名を言ってください。")
+                    .set_should_end_session(False).response)
         state = load_state(handler_input)
         state["order"] = make_order(state["shuffle"], first=song_id)
         save_state(handler_input, state)
         return play_track(handler_input, "{}を再生します。".format(SONGS[song_id]["title"]), song_id)
+
+
+class AskSongIntentHandler(AbstractRequestHandler):
+    """「曲を選んで」→ 曲名を聞き返す(この会話の中では呼び出し名なしで答えられる)"""
+    def can_handle(self, handler_input):
+        return is_intent_name("AskSongIntent")(handler_input)
+
+    def handle(self, handler_input):
+        titles = "、".join(s["title"] for s in LIBRARY)
+        return (handler_input.response_builder
+                .speak("どの曲にしますか?{}から選べます。".format(titles))
+                .ask("曲名を言ってください。")
+                .set_should_end_session(False).response)
 
 
 class ResumeIntentHandler(AbstractRequestHandler):
@@ -398,6 +412,7 @@ class DebugInterceptor(AbstractRequestInterceptor):
 sb = SkillBuilder()
 sb.add_global_request_interceptor(DebugInterceptor())
 sb.add_request_handler(StartPlaybackHandler())
+sb.add_request_handler(AskSongIntentHandler())
 sb.add_request_handler(PlaySongIntentHandler())
 sb.add_request_handler(ResumeIntentHandler())
 sb.add_request_handler(StopHandler())

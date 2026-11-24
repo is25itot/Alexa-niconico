@@ -57,7 +57,18 @@
                         "{songTitle} をかけて",
                         "{songTitle} を流して",
                         "{songTitle} を再生して",
-                        "{songTitle} を聞きたい"
+                        "{songTitle} を聞きたい",
+                        "{songTitle}"
+                    ]
+                },
+                {
+                    "name": "AskSongIntent",
+                    "slots": [],
+                    "samples": [
+                        "曲を選んで",
+                        "曲を指定したい",
+                        "曲名を指定して",
+                        "好きな曲を選びたい"
                     ]
                 },
                 {
