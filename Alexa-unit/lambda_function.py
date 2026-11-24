@@ -275,7 +275,10 @@ def search_songs(query):
             continue
         scored.append((score, song["id"]))
     scored.sort(key=lambda x: -x[0])
-    return [sid for _, sid in scored]
+    if not scored:
+        return []
+    top = scored[0][0]
+    return [sid for score, sid in scored if score == top]   # 最高点の曲だけを返す
 
 
 # ---------------------------------------------------------------
