@@ -14,6 +14,8 @@ from ask_sdk_core.skill_builder import SkillBuilder
 from ask_sdk_core.dispatch_components import (AbstractRequestHandler, AbstractExceptionHandler, AbstractRequestInterceptor)
 from ask_sdk_core.utils import is_request_type, is_intent_name
 from ask_sdk_model.interfaces.audioplayer import (PlayDirective, PlayBehavior, AudioItem, Stream, StopDirective)
+from ask_sdk_model import Intent, Slot
+from ask_sdk_model.dialog import ElicitSlotDirective
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -260,6 +262,19 @@ CANCEL_WORDS = {
 }
 
 
+def elicit_query(builder, speech):
+    """曲名を聞き返す。次の返事は、曲名だけで受け取れる"""
+    return (builder
+            .speak(speech)
+            .ask("曲名を言ってください。")   # 返事がなかったときの再質問
+            .add_directive(ElicitSlotDirective(
+                slot_to_elicit="query",
+                updated_intent=Intent(
+                    name="SearchPlayIntent",
+                    slots={"query": Slot(name="query")})))
+            .set_should_end_session(False).response)
+
+
 def search_songs(query):
     """キーワードに合う曲のidを、近い順に返す。
     将来、サーバーで検索するときは、この関数を差し替える"""
@@ -320,9 +335,7 @@ class SearchPlayIntentHandler(AbstractRequestHandler):
                     .set_should_end_session(True).response)
 
         if not query:
-            return (builder.speak("どの曲にしますか?")
-                    .ask("曲名を言ってください。")
-                    .set_should_end_session(False).response)
+            return elicit_query(builder, "どの曲にしますか?")
 
         state = load_state(handler_input)
 
@@ -334,10 +347,8 @@ class SearchPlayIntentHandler(AbstractRequestHandler):
 
         hits = search_songs(query)
         if not hits:
-            return (builder
-                    .speak("{}は見つかりませんでした。もう一度、曲名を言ってください。".format(query))
-                    .ask("曲名を言ってください。")
-                    .set_should_end_session(False).response)
+            return elicit_query(
+                builder, "{}は見つかりませんでした。もう一度、曲名を言ってください。".format(query))
 
         # 見つかった曲を先頭に、残りの曲をそのあとに並べる
         rest = [s for s in make_order(state["shuffle"]) if s not in hits]
