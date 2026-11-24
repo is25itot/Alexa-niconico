@@ -1,21 +1,24 @@
+import hashlib
+import json
+import logging
+import os
+import random
 import re
 import time
-import os
-import json
-import random
-import uuid
-import hashlib
-import logging
-import boto3
 import unicodedata
+import uuid
 import datetime
 
+import boto3
+from ask_sdk_core.dispatch_components import (
+    AbstractExceptionHandler, AbstractRequestHandler, AbstractRequestInterceptor)
 from ask_sdk_core.skill_builder import SkillBuilder
-from ask_sdk_core.dispatch_components import (AbstractRequestHandler, AbstractExceptionHandler, AbstractRequestInterceptor)
-from ask_sdk_core.utils import is_request_type, is_intent_name
-from ask_sdk_model.interfaces.audioplayer import (PlayDirective, PlayBehavior, AudioItem, Stream, StopDirective)
+from ask_sdk_core.utils import is_intent_name, is_request_type
 from ask_sdk_model import Intent, Slot
 from ask_sdk_model.dialog import ElicitSlotDirective
+from ask_sdk_model.interfaces.audioplayer import (
+    AudioItem, AudioItemMetadata, PlayBehavior, PlayDirective, StopDirective, Stream)
+from ask_sdk_model.interfaces.display import Image, ImageInstance
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -83,15 +86,17 @@ def _clean_library(raw):
         library.append({
             "id": song_id, "key": key, "title": title,
             "aliases": list(item.get("aliases", [])),
-            "tags": list(item.get("tags", []))})
+            "tags": list(item.get("tags", [])),
+            "subtitle": item.get("subtitle", ""),
+            "art": item.get("art")})
     return library
 
 
-def refresh_library(force=False):
+def refresh_library():
     """S3の曲リストを読み込む(失敗したら、今のリストのまま使い続ける)"""
     global _library_loaded_at
     now = time.time()
-    if not force and _library_loaded_at and now - _library_loaded_at < LIBRARY_TTL:
+    if now - _library_loaded_at < LIBRARY_TTL:
         return
     _library_loaded_at = now  # 失敗しても、毎回やり直さない
     try:
@@ -201,14 +206,30 @@ def current_song_id(handler_input):
     return parse_song_id(audio.token) if audio and audio.token else None
 
 
+def build_metadata(song_id):
+    song = SONGS[song_id]
+    image = None
+    if song.get("art"):
+        image = Image(
+            content_description=song["title"],
+            sources=[ImageInstance(url=create_long_presigned_url(song["art"]))])
+    return AudioItemMetadata(
+        title=song["title"],
+        subtitle=song.get("subtitle") or None,
+        art=image,
+        background_image=image)
+
+
 def build_play_directive(song_id, behavior, previous_token=None, offset=0):
     return PlayDirective(
         play_behavior=behavior,
-        audio_item=AudioItem(stream=Stream(
-            token=make_token(song_id),
-            url=create_long_presigned_url(SONGS[song_id]["key"]),
-            offset_in_milliseconds=offset,
-            expected_previous_token=previous_token)))
+        audio_item=AudioItem(
+            stream=Stream(
+                token=make_token(song_id),
+                url=create_long_presigned_url(SONGS[song_id]["key"]),
+                offset_in_milliseconds=offset,
+                expected_previous_token=previous_token),
+            metadata=build_metadata(song_id)))
 
 
 def play_track(handler_input, speech, song_id, offset=0):
@@ -227,31 +248,6 @@ def play_track(handler_input, speech, song_id, offset=0):
 def normalize(text):
     """スペースを取り除き、全角・半角をそろえる(「テスト 2」→「テスト2」)"""
     return "".join(unicodedata.normalize("NFKC", text or "").split()).lower()
-
-
-def resolve_song_id(handler_input):
-    """スロット(曲名)から曲idを取り出す。見つからなければ None"""
-    slots = handler_input.request_envelope.request.intent.slots or {}
-    slot = slots.get("songTitle")
-    spoken = normalize(slot.value) if slot else ""
-    logger.info("songTitle: %r -> %r", slot.value if slot else None, spoken)
-
-    # 1) 聞き取った言葉が、曲名または別名と一致する曲を探す
-    if spoken:
-        for song in LIBRARY:
-            names = [song["title"]] + song.get("aliases", [])
-            if spoken in [normalize(n) for n in names]:
-                return song["id"]
-
-    # 2) 一致しなければ、Alexaの解決結果が1件だけのときに採用する
-    try:
-        for auth in slot.resolutions.resolutions_per_authority:
-            code = getattr(auth.status.code, "value", auth.status.code)
-            if code == "ER_SUCCESS_MATCH" and len(auth.values) == 1:
-                return auth.values[0].value.id
-    except AttributeError:
-        pass
-    return None
 
 
 GENERIC_WORDS = {"音楽", "曲", "何か", "なにか", "ミュージック", "おんがく"}
@@ -507,6 +503,16 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
                 .speak("すみません、うまくいきませんでした。").response)
 
 
+class HelpHandler(AbstractRequestHandler):
+    def can_handle(self, handler_input):
+        return is_intent_name("AMAZON.HelpIntent")(handler_input)
+
+    def handle(self, handler_input):
+        return (handler_input.response_builder
+                .speak("曲名を言って再生したり、次の曲、シャッフル、ループなどを言えます。曲を流すときは、音楽をかけて、と言ってください。")
+                .set_should_end_session(False).response)
+
+
 def debug_log(message):
     """届いたリクエストをS3の Debug/events.json に残す(直近40件)"""
     key = "Debug/events.json"
@@ -538,6 +544,7 @@ class DebugInterceptor(AbstractRequestInterceptor):
         if err:
             parts.append("error=" + str(err))
         debug_log(" ".join(parts))
+
 
 class LibraryInterceptor(AbstractRequestInterceptor):
     def process(self, handler_input):
