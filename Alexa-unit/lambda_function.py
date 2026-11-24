@@ -1,3 +1,5 @@
+import re
+import time
 import os
 import json
 import random
@@ -17,19 +19,34 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # ---------------------------------------------------------------
-# 曲リスト(idは英数字のみ。"." は使わない。対話モデルのスロット値のidと一致させる)
+# 曲リスト(普段は S3 の Media/songs.json を読む。読めないときは DEFAULT_LIBRARY を使う)
+# idは英数字・_・- のみ("." は使わない)
 # ---------------------------------------------------------------
-LIBRARY = [
-    {"id": "test1",  "key": "Media/test1.mp3",  "title": "テスト1","aliases": ["テストいち", "テスト一"]},
-    {"id": "test2", "key": "Media/test2.mp3", "title": "テスト2","aliases": ["テストに", "テスト二"]},
-    {"id": "test3", "key": "Media/test3.mp3", "title": "テスト3","aliases": ["テストさん", "テスト三"]},
-    {"id": "test4", "key": "Media/test4.mp3", "title": "テスト4","aliases": ["テストよん", "テスト四"]},
-    {"id": "test5", "key": "Media/test5.mp3", "title": "テスト5","aliases": ["テストご", "テスト五"]},
-    {"id": "test6", "key": "Media/test6.mp3", "title": "テスト6","aliases": ["テストろく", "テスト六"]},
-    {"id": "test7", "key": "Media/test7.mp3", "title": "テスト7","aliases": ["テストなな", "テスト七"]},
+DEFAULT_LIBRARY = [
+    {"id": "test1", "key": "Media/test1.mp3", "title": "テスト1", "aliases": ["テストいち", "テスト一"]},
+    {"id": "test2", "key": "Media/test2.mp3", "title": "テスト2", "aliases": ["テストに", "テスト二"]},
+    {"id": "test3", "key": "Media/test3.mp3", "title": "テスト3", "aliases": ["テストさん", "テスト三"]},
+    {"id": "test4", "key": "Media/test4.mp3", "title": "テスト4", "aliases": ["テストよん", "テスト四"]},
+    {"id": "test5", "key": "Media/test5.mp3", "title": "テスト5", "aliases": ["テストご", "テスト五"]},
+    {"id": "test6", "key": "Media/test6.mp3", "title": "テスト6", "aliases": ["テストろく", "テスト六"]},
+    {"id": "test7", "key": "Media/test7.mp3", "title": "テスト7", "aliases": ["テストなな", "テスト七"]},
 ]
-SONGS = {s["id"]: s for s in LIBRARY}
-SONG_IDS = [s["id"] for s in LIBRARY]
+LIBRARY_KEY = "Media/songs.json"
+LIBRARY_TTL = 60          # 秒。JSONを更新してから反映されるまでの目安
+LIBRARY = []
+SONGS = {}
+SONG_IDS = []
+_library_loaded_at = 0
+
+
+def _set_library(library):
+    global LIBRARY, SONGS, SONG_IDS
+    LIBRARY = library
+    SONGS = {s["id"]: s for s in library}
+    SONG_IDS = [s["id"] for s in library]
+
+
+_set_library(list(DEFAULT_LIBRARY))
 
 # ---------------------------------------------------------------
 # S3(署名付きURLと、再生設定の保存)
@@ -44,6 +61,46 @@ s3_client = boto3.client(
         connect_timeout=2,
         read_timeout=3,
         retries={"max_attempts": 1}))
+
+
+def _clean_library(raw):
+    """JSONの中身を確認して、使える曲だけを返す"""
+    if isinstance(raw, dict):
+        raw = raw.get("songs", [])
+    library, seen = [], set()
+    for item in raw:
+        try:
+            song_id, key, title = str(item["id"]), item["key"], item["title"]
+        except (KeyError, TypeError):
+            logger.warning("曲リストの項目を読み飛ばしました: %r", item)
+            continue
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", song_id) or song_id in seen:
+            logger.warning("idが不正か重複しています: %r", song_id)
+            continue
+        seen.add(song_id)
+        library.append({
+            "id": song_id, "key": key, "title": title,
+            "aliases": list(item.get("aliases", [])),
+            "tags": list(item.get("tags", []))})
+    return library
+
+
+def refresh_library(force=False):
+    """S3の曲リストを読み込む(失敗したら、今のリストのまま使い続ける)"""
+    global _library_loaded_at
+    now = time.time()
+    if not force and _library_loaded_at and now - _library_loaded_at < LIBRARY_TTL:
+        return
+    _library_loaded_at = now  # 失敗しても、毎回やり直さない
+    try:
+        obj = s3_client.get_object(Bucket=BUCKET, Key=LIBRARY_KEY)
+        library = _clean_library(json.loads(obj["Body"].read().decode("utf-8")))
+        if library:
+            _set_library(library)
+        else:
+            logger.warning("曲リストが空だったので、今のリストを使います")
+    except Exception as e:
+        logger.info("曲リストをS3から読めませんでした。今のリストを使います: %s", e)
 
 
 def create_long_presigned_url(object_name, expires=3600):
@@ -448,8 +505,13 @@ class DebugInterceptor(AbstractRequestInterceptor):
             parts.append("error=" + str(err))
         debug_log(" ".join(parts))
 
+class LibraryInterceptor(AbstractRequestInterceptor):
+    def process(self, handler_input):
+        refresh_library()
+
 
 sb = SkillBuilder()
+sb.add_global_request_interceptor(LibraryInterceptor())
 sb.add_global_request_interceptor(DebugInterceptor())
 sb.add_request_handler(StartPlaybackHandler())
 sb.add_request_handler(SearchPlayIntentHandler())

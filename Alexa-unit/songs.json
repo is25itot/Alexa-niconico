@@ -1,0 +1,9 @@
+[
+    {"id": "test1", "key": "Media/test1.mp3", "title": "テスト1", "aliases": ["テストいち", "テスト一"], "tags": ["テスト"]},
+    {"id": "test2", "key": "Media/test2.mp3", "title": "テスト2", "aliases": ["テストに", "テスト二"], "tags": ["テスト"]},
+    {"id": "test3", "key": "Media/test3.mp3", "title": "テスト3", "aliases": ["テストさん", "テスト三"], "tags": ["テスト"]},
+    {"id": "test4", "key": "Media/test4.mp3", "title": "テスト4", "aliases": ["テストよん", "テスト四"], "tags": ["テスト"]},
+    {"id": "test5", "key": "Media/test5.mp3", "title": "テスト5", "aliases": ["テストご", "テスト五"], "tags": ["テスト"]},
+    {"id": "test6", "key": "Media/test6.mp3", "title": "テスト6", "aliases": ["テストろく", "テスト六"], "tags": ["テスト"]},
+    {"id": "test7", "key": "Media/test7.mp3", "title": "テスト7", "aliases": ["テストなな", "テスト七"], "tags": ["無音"]}
+]
