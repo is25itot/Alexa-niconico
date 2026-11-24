@@ -404,6 +404,14 @@ class PlaybackModeHandler(AbstractRequestHandler):
         intent_name = handler_input.request_envelope.request.intent.name
         key, value, speech = self.SETTINGS[intent_name]
         state = load_state(handler_input)
+
+        if intent_name == "AMAZON.LoopOnIntent":
+            # 全曲ループ中にもう一度言うと1曲ループへ、1曲ループ中なら全曲ループへ切り替える
+            if state["loop"] == "all":
+                value, speech = "one", "1曲ループにしました。"
+            elif state["loop"] == "one":
+                value, speech = "all", "全曲ループにしました。"
+
         state[key] = value
         song_id = current_song_id(handler_input)
         if key == "shuffle":  # 今の曲を先頭にして、順番を作り直す
