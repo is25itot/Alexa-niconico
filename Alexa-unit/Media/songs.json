@@ -1,0 +1,65 @@
+[
+    {
+        "id": "test1",
+        "key": "Media/test1.mp3",
+        "title": "テスト1",
+        "subtitle": "猛茸",
+        "art": "Media/art/test1.jpg",
+        "aliases": ["テストいち", "テスト一"],
+        "tags": ["テスト"]
+    },
+    {
+        "id": "test2",
+        "key": "Media/test2.mp3",
+        "title": "テスト2",
+        "subtitle": "渡辺岳夫",
+        "art": "Media/art/test2.jpg",
+        "aliases": ["テストに", "テスト二"],
+        "tags": ["テスト"]
+    },
+    {
+        "id": "test3",
+        "key": "Media/test3.mp3",
+        "title": "テスト3",
+        "subtitle": "中川幸太郎",
+        "art": "Media/art/test3.jpg",
+        "aliases": ["テストさん", "テスト三"],
+        "tags": ["テスト"]
+    },
+    {
+        "id": "test4",
+        "key": "Media/test4.mp3",
+        "title": "テスト4",
+        "subtitle": "萩田光雄",
+        "art": "Media/art/test4.jpg",
+        "aliases": ["テストよん", "テスト四"],
+        "tags": ["テスト"]
+    },
+    {
+        "id": "test5",
+        "key": "Media/test5.mp3",
+        "title": "テスト5",
+        "subtitle": "MGS1のアレ",
+        "art": "Media/art/test5.jpg",
+        "aliases": ["テストご", "テスト五"],
+        "tags": ["テスト"]
+    },
+    {
+        "id": "test6",
+        "key": "Media/test6.mp3",
+        "title": "テスト6",
+        "subtitle": "川井憲次",
+        "art": "Media/art/test6.jpg",
+        "aliases": ["テストろく", "テスト六"],
+        "tags": ["テスト"]
+    },
+    {
+        "id": "test7",
+        "key": "Media/test7.mp3",
+        "title": "テスト7",
+        "subtitle": "ffmpegニキ",
+        "art": "Media/art/test7.jpg",
+        "aliases": ["テストなな", "テスト七"],
+        "tags": ["無音"]
+    }
+]
