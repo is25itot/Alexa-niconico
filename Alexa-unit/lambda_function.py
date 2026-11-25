@@ -6,6 +6,7 @@ import random
 import re
 import time
 import unicodedata
+import urllib.request
 import uuid
 import datetime
 
@@ -46,8 +47,8 @@ _library_loaded_at = 0
 
 def _set_library(library):
     global LIBRARY, SONGS, SONG_IDS
-    LIBRARY = library
-    SONGS = {s["id"]: s for s in library}
+    LIBRARY = [dict(s, source=s.get("source", "s3")) for s in library]
+    SONGS = {s["id"]: s for s in LIBRARY}
     SONG_IDS = [s["id"] for s in library]
 
 
@@ -68,6 +69,92 @@ s3_client = boto3.client(
         retries={"max_attempts": 1}))
 
 
+# ---------------------------------------------------------------
+# 音声サーバー(URLとAPIキーは S3 の Config/server.json に置く。コードには書かない)
+#   {"base_url": "https://<ドメイン>.duckdns.org", "api_key": "..."}
+# ---------------------------------------------------------------
+SERVER_CONFIG_KEY = "Config/server.json"
+SERVER_CONFIG_TTL = 300
+VIDEO_ID_RE = re.compile(r"(sm|nm|so)?\d{1,12}")
+PLAY_WAIT_SEC = 3       # 再生開始のとき、サーバーの準備を待つ秒数(Alexaの応答は約8秒まで)
+ENQUEUE_WAIT_SEC = 2    # 次の曲の予約のとき
+_server_cfg = None
+_server_cfg_loaded_at = 0
+
+
+class StreamNotReady(Exception):
+    """再生用のURLを用意できなかった。status: processing / error / unreachable"""
+    def __init__(self, status):
+        super().__init__(status)
+        self.status = status
+
+
+def get_server_config():
+    global _server_cfg, _server_cfg_loaded_at
+    now = time.time()
+    if _server_cfg and now - _server_cfg_loaded_at < SERVER_CONFIG_TTL:
+        return _server_cfg
+    try:
+        obj = s3_client.get_object(Bucket=BUCKET, Key=SERVER_CONFIG_KEY)
+        cfg = json.loads(obj["Body"].read().decode("utf-8"))
+        if cfg.get("base_url") and cfg.get("api_key"):
+            _server_cfg, _server_cfg_loaded_at = cfg, now
+    except Exception as e:
+        logger.error("サーバー設定を読めませんでした: %s", e)
+    return _server_cfg
+
+
+def server_get(path, timeout):
+    cfg = get_server_config()
+    if not cfg:
+        raise RuntimeError("server config missing")
+    req = urllib.request.Request(
+        cfg["base_url"].rstrip("/") + path,
+        headers={"X-API-Key": cfg["api_key"]})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def get_server_audio_url(video_id, wait_sec):
+    """再生用の署名付きURLを返す。用意できなければ StreamNotReady。
+    prepare は最初に1回だけ呼び、あとは status で確認する(失敗した取得をやり直さないため)"""
+    deadline = time.time() + wait_sec
+
+    def timeout():
+        return max(0.5, min(3, deadline - time.time()))
+
+    try:
+        res = server_get("/api/prepare/" + video_id, timeout())
+        while res.get("status") == "processing" and time.time() < deadline:
+            time.sleep(1)
+            res = server_get("/api/status/" + video_id, timeout())
+    except Exception as e:
+        logger.error("サーバーに接続できません: %s", e)
+        raise StreamNotReady("unreachable")
+    status = res.get("status")
+    if status == "ready" and res.get("url"):
+        return res["url"]
+    if status == "error":
+        logger.error("サーバーの取得が失敗: %s %s", video_id, res.get("detail"))
+        raise StreamNotReady("error")
+    raise StreamNotReady("processing")   # processing / none
+
+
+def prefetch_server_song(video_id):
+    """次の曲を先に用意させる(結果は待たない)"""
+    try:
+        server_get("/api/prepare/" + video_id, 1.5)
+    except Exception as e:
+        logger.info("先読みに失敗: %s", e)
+
+
+def get_stream_url(song_id, wait_sec):
+    song = SONGS[song_id]
+    if song["source"] == "server":
+        return get_server_audio_url(song["video_id"], wait_sec)
+    return create_long_presigned_url(song["key"])
+
+
 def _clean_library(raw):
     """JSONの中身を確認して、使える曲だけを返す"""
     if isinstance(raw, dict):
@@ -75,16 +162,28 @@ def _clean_library(raw):
     library, seen = [], set()
     for item in raw:
         try:
-            song_id, key, title = str(item["id"]), item["key"], item["title"]
+            song_id, title = str(item["id"]), item["title"]
         except (KeyError, TypeError):
             logger.warning("曲リストの項目を読み飛ばしました: %r", item)
             continue
         if not re.fullmatch(r"[A-Za-z0-9_-]+", song_id) or song_id in seen:
             logger.warning("idが不正か重複しています: %r", song_id)
             continue
+        key = item.get("key")
+        video_id = item.get("video_id")
+        # video_id があればサーバー。source で "s3" と書けば、S3の曲として扱える
+        source = item.get("source") or ("server" if video_id else "s3")
+        if source == "server":
+            if not (isinstance(video_id, str) and VIDEO_ID_RE.fullmatch(video_id)):
+                logger.warning("video_idが不正です: %r", item)
+                continue
+        elif not key:
+            logger.warning("keyがありません: %r", item)
+            continue
         seen.add(song_id)
         library.append({
             "id": song_id, "key": key, "title": title,
+            "source": source, "video_id": video_id,
             "aliases": list(item.get("aliases", [])),
             "tags": list(item.get("tags", [])),
             "subtitle": item.get("subtitle", ""),
@@ -220,29 +319,56 @@ def build_metadata(song_id):
         background_image=image)
 
 
-def build_play_directive(song_id, behavior, previous_token=None, offset=0):
+def build_play_directive(song_id, behavior, previous_token=None, offset=0,wait_sec=PLAY_WAIT_SEC):
+    """再生指示を作る。サーバーの曲が用意できなければ StreamNotReady"""
+    url = get_stream_url(song_id, wait_sec)
     return PlayDirective(
         play_behavior=behavior,
         audio_item=AudioItem(
             stream=Stream(
                 token=make_token(song_id),
-                url=create_long_presigned_url(SONGS[song_id]["key"]),
+                url=url,
                 offset_in_milliseconds=offset,
                 expected_previous_token=previous_token),
             metadata=build_metadata(song_id)))
 
 
+NOT_READY_SPEECH = {
+    "processing": "{}を準備しています。少ししてから、もう一度言ってください。",
+    "error": "{}は取得できませんでした。",
+    "unreachable": "サーバーに接続できません。",
+}
+
+
+def prefetch_next(handler_input, song_id):
+    """再生順で次の曲がサーバーの曲なら、先に用意させる(1曲だけ)"""
+    if not any(s["source"] == "server" for s in LIBRARY):
+        return
+    try:
+        order = load_state(handler_input)["order"]
+        if song_id not in order:
+            return
+        nxt = SONGS.get(order[(order.index(song_id) + 1) % len(order)])
+        if nxt and nxt["id"] != song_id and nxt["source"] == "server":
+            prefetch_server_song(nxt["video_id"])
+    except Exception as e:
+        logger.info("先読みをスキップ: %s", e)
+
+
 def play_track(handler_input, speech, song_id, offset=0):
     builder = handler_input.response_builder
+    try:
+        directive = build_play_directive(
+            song_id, PlayBehavior.REPLACE_ALL, offset=offset)
+    except StreamNotReady as e:
+        # 再生指示は出さない(今流れている曲があれば、そのまま続く)
+        msg = NOT_READY_SPEECH.get(e.status, "再生できませんでした。").format(
+            SONGS[song_id]["title"])
+        return builder.speak(msg).set_should_end_session(True).response
     if speech:
         builder.speak(speech)
-    return (
-        builder
-        .add_directive(build_play_directive(
-            song_id, PlayBehavior.REPLACE_ALL, offset=offset))
-        .set_should_end_session(True)
-        .response
-    )
+    prefetch_next(handler_input, song_id)
+    return builder.add_directive(directive).set_should_end_session(True).response
 
 
 def normalize(text):
@@ -445,9 +571,12 @@ class PlaybackModeHandler(AbstractRequestHandler):
         activity = getattr(audio.player_activity, "value", audio.player_activity) if audio else None
         if song_id and activity == "PLAYING":
             # 同じ曲を同じ位置から再開(予約済みの次の曲も破棄され、新設定で予約し直される)
-            builder.add_directive(build_play_directive(
-                song_id, PlayBehavior.REPLACE_ALL,
-                offset=audio.offset_in_milliseconds or 0))
+            try:
+                builder.add_directive(build_play_directive(
+                    song_id, PlayBehavior.REPLACE_ALL,
+                    offset=audio.offset_in_milliseconds or 0))
+            except StreamNotReady:
+                pass   # 再生中の曲はそのまま続く(設定だけ変わる)
         return builder.set_should_end_session(True).response
 
 
@@ -463,11 +592,22 @@ class NearlyFinishedHandler(AbstractRequestHandler):
         save_state(handler_input, state)
         if song_id is None:  # ループなしで最後の曲まで来た → 予約せず、そのまま終了
             return handler_input.response_builder.response
-        logger.info("NearlyFinished: %s -> %s", current_token, song_id)
-        return (handler_input.response_builder
-                .add_directive(build_play_directive(
-                    song_id, PlayBehavior.ENQUEUE, previous_token=current_token))
-                .response)
+        for _ in range(3):
+            try:
+                directive = build_play_directive(
+                    song_id, PlayBehavior.ENQUEUE, previous_token=current_token,
+                    wait_sec=ENQUEUE_WAIT_SEC)
+                logger.info("NearlyFinished: %s -> %s", current_token, song_id)
+                return handler_input.response_builder.add_directive(directive).response
+            except StreamNotReady as e:
+                logger.warning("次の曲を予約できません: %s (%s)", song_id, e.status)
+                if e.status != "error":   # 準備中・接続不可なら、予約せず終了
+                    break
+                failed = song_id          # 取得に失敗した曲は飛ばして、その次へ
+                song_id = next_song(state, failed, manual=False)
+                if song_id is None or song_id == failed:
+                    break
+        return handler_input.response_builder.response
 
 
 class AudioPlayerEventHandler(AbstractRequestHandler):
