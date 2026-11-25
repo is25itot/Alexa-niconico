@@ -598,7 +598,9 @@ class NearlyFinishedHandler(AbstractRequestHandler):
                     song_id, PlayBehavior.ENQUEUE, previous_token=current_token,
                     wait_sec=ENQUEUE_WAIT_SEC)
                 logger.info("NearlyFinished: %s -> %s", current_token, song_id)
-                return handler_input.response_builder.add_directive(directive).response
+                response = handler_input.response_builder.add_directive(directive).response
+                prefetch_next(handler_input, song_id)   # さらにその次の曲を先読みする
+                return response
             except StreamNotReady as e:
                 logger.warning("次の曲を予約できません: %s (%s)", song_id, e.status)
                 if e.status != "error":   # 準備中・接続不可なら、予約せず終了
