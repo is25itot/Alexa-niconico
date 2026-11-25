@@ -319,7 +319,7 @@ def build_metadata(song_id):
         background_image=image)
 
 
-def build_play_directive(song_id, behavior, previous_token=None, offset=0,wait_sec=PLAY_WAIT_SEC):
+def build_play_directive(song_id, behavior, previous_token=None, offset=0, wait_sec=PLAY_WAIT_SEC):
     """再生指示を作る。サーバーの曲が用意できなければ StreamNotReady"""
     url = get_stream_url(song_id, wait_sec)
     return PlayDirective(
@@ -372,8 +372,10 @@ def play_track(handler_input, speech, song_id, offset=0):
 
 
 def normalize(text):
-    """スペースを取り除き、全角・半角をそろえる(「テスト 2」→「テスト2」)"""
-    return "".join(unicodedata.normalize("NFKC", text or "").split()).lower()
+    """スペースを取り除き、全角・半角、かな、漢数字をそろえる"""
+    t = "".join(unicodedata.normalize("NFKC", text or "").split()).lower()
+    t = t.translate(str.maketrans("〇一二三四五六七八九", "0123456789"))
+    return "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in t)
 
 
 GENERIC_WORDS = {"音楽", "曲", "何か", "なにか", "ミュージック", "おんがく"}
@@ -598,7 +600,9 @@ class NearlyFinishedHandler(AbstractRequestHandler):
                     song_id, PlayBehavior.ENQUEUE, previous_token=current_token,
                     wait_sec=ENQUEUE_WAIT_SEC)
                 logger.info("NearlyFinished: %s -> %s", current_token, song_id)
-                return handler_input.response_builder.add_directive(directive).response
+                response = handler_input.response_builder.add_directive(directive).response
+                prefetch_next(handler_input, song_id)   # さらにその次の曲を先読みする
+                return response
             except StreamNotReady as e:
                 logger.warning("次の曲を予約できません: %s (%s)", song_id, e.status)
                 if e.status != "error":   # 準備中・接続不可なら、予約せず終了
