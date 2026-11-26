@@ -88,7 +88,7 @@ VIDEO_ID_RE = re.compile(r"(sm|nm|so)?\d{1,12}")
 PLAY_WAIT_SEC = 3       # 再生開始のとき、サーバーの準備を待つ秒数(Alexaの応答は約8秒まで)
 ENQUEUE_WAIT_SEC = 2    # 次の曲の予約のとき
 SEARCH_LIMIT = 10           # サーバー検索で、キューに入れる曲数
-SEARCH_TIMEOUT = 3          # 検索APIを待つ秒数
+SEARCH_TIMEOUT = 4          # 検索APIを待つ秒数
 SEARCH_PLAY_WAIT_SEC = 2    # 検索のあと、最初の曲の準備を待つ秒数
 _server_cfg = None
 _server_cfg_loaded_at = 0
@@ -492,7 +492,7 @@ def search_server(query):
         songs.append({
             "id": vid, "video_id": vid, "source": "server",
             "title": d.get("title") or vid,
-            "subtitle": make_subtitle(d.get("views"), d.get("duration")),
+            "subtitle": d.get("uploader") or make_subtitle(d.get("views"), d.get("duration")),
             "art_url": d.get("thumbnail")})
     return songs
 

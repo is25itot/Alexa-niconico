@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import hmac
+import html
 import json
 import os
 import re
@@ -35,6 +36,9 @@ SEARCH_MAX_LEN = int(os.environ.get("SEARCH_MAX_LEN", 1200))    # 長すぎる�
 SEARCH_CACHE_TTL = 600                                          # 同じ検索のキャッシュ(秒)
 SEARCH_MIN_INTERVAL = 1.0                                       # 検索APIへの最小リクエスト間隔(秒)
 PREFETCH_TOP = 2                                                # 検索のとき、上位何曲を先に取得し始めるか
+UPLOADER_TIMEOUT = 1.5                                          # 投稿者名の問い合わせを待つ秒数
+uploader_cache = {}      # 動画ID -> 投稿者名
+uploader_skip_until = 0.0  # 問い合わせが全滅したとき、この時刻まで問い合わせない
 search_cache = {}  # (キーワード, 件数) -> (時刻, 結果)
 search_lock = asyncio.Lock()
 last_search = 0.0
@@ -130,6 +134,43 @@ def snapshot_search(q: str, limit: int):
         return json.loads(r.read().decode("utf-8"))
 
 
+def fetch_uploader(video_id: str):
+    """投稿者名を取る(ニコニコの非公式API getthumbinfo。失敗したら None)"""
+    req = urllib.request.Request(
+        f"https://ext.nicovideo.jp/api/getthumbinfo/{video_id}",
+        headers={"User-Agent": SEARCH_CONTEXT},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=UPLOADER_TIMEOUT) as r:
+            text = r.read().decode("utf-8", errors="replace")
+    except Exception:
+        return None
+    if 'status="ok"' not in text:
+        return None
+    for tag in ("user_nickname", "ch_name"):   # 個人の動画 → チャンネルの動画
+        m = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.S)
+        name = html.unescape(m.group(1)).strip() if m else ""
+        if name and name != "-":
+            return name
+    return None
+
+
+async def fill_uploaders(items):
+    """検索結果に投稿者名(uploader)を付ける。取れなかった曲は None"""
+    global uploader_skip_until
+    need = [i for i in items if i["id"] not in uploader_cache]
+    if need and time.time() >= uploader_skip_until:
+        names = await asyncio.gather(
+            *(asyncio.to_thread(fetch_uploader, i["id"]) for i in need))
+        for i, n in zip(need, names):
+            if n:
+                uploader_cache[i["id"]] = n
+        if not any(names):   # 全滅(APIが止まっている可能性)→ しばらく問い合わせない
+            uploader_skip_until = time.time() + 300
+    for i in items:
+        i["uploader"] = uploader_cache.get(i["id"])
+
+
 def ensure_download(video_id: str):
     """まだ保存も取得中でもなければ、取得を始める(prepare と同じ動き)"""
     if (CACHE_DIR / f"{video_id}.mp3").exists():
@@ -175,6 +216,7 @@ async def search(q: str, limit: int = 10, prefetch: int = PREFETCH_TOP,
             for d in data.get("data", [])
             if VIDEO_ID_RE.match(d.get("contentId") or "")
         ]
+        await fill_uploaders(results)
         search_cache[key] = (time.time(), results)
 
     # 上位の曲は、先に取得を始めておく(Alexaの待ち時間を減らすため)
