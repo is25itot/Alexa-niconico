@@ -61,7 +61,8 @@ def save_blocked():
 
 
 def add_blocked(video_id: str, reason: str):
-    blocked[video_id] = {"reason": reason.strip()[-200:], "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    line = next((l for l in reason.splitlines() if "ERROR" in l), reason.strip())  # ERROR の行を残す
+    blocked[video_id] = {"reason": line.strip()[:120], "at": time.strftime("%Y-%m-%d %H:%M:%S")}
     save_blocked()
 
 
