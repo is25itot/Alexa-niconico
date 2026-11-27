@@ -7,6 +7,7 @@ import re
 import time
 import unicodedata
 import urllib.request
+import urllib.parse
 import uuid
 import datetime
 
@@ -20,6 +21,7 @@ from ask_sdk_model.dialog import ElicitSlotDirective
 from ask_sdk_model.interfaces.audioplayer import (
     AudioItem, AudioItemMetadata, PlayBehavior, PlayDirective, StopDirective, Stream)
 from ask_sdk_model.interfaces.display import Image, ImageInstance
+from xml.sax.saxutils import escape as xml_escape
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -69,6 +71,13 @@ s3_client = boto3.client(
         retries={"max_attempts": 1}))
 
 
+# 検索で見つけた曲(再生キューと一緒に State/...json に保存される)。load_state が入れ替える
+QUEUE_SONGS = {}
+
+def get_song(song_id):
+    return SONGS.get(song_id) or QUEUE_SONGS.get(song_id)
+
+
 # ---------------------------------------------------------------
 # 音声サーバー(URLとAPIキーは S3 の Config/server.json に置く。コードには書かない)
 #   {"base_url": "https://<ドメイン>.duckdns.org", "api_key": "..."}
@@ -78,6 +87,9 @@ SERVER_CONFIG_TTL = 300
 VIDEO_ID_RE = re.compile(r"(sm|nm|so)?\d{1,12}")
 PLAY_WAIT_SEC = 3       # 再生開始のとき、サーバーの準備を待つ秒数(Alexaの応答は約8秒まで)
 ENQUEUE_WAIT_SEC = 2    # 次の曲の予約のとき
+SEARCH_LIMIT = 10           # サーバー検索で、キューに入れる曲数
+SEARCH_TIMEOUT = 4          # 検索APIを待つ秒数
+SEARCH_PLAY_WAIT_SEC = 2    # 検索のあと、最初の曲の準備を待つ秒数
 _server_cfg = None
 _server_cfg_loaded_at = 0
 
@@ -149,7 +161,7 @@ def prefetch_server_song(video_id):
 
 
 def get_stream_url(song_id, wait_sec):
-    song = SONGS[song_id]
+    song = get_song(song_id)
     if song["source"] == "server":
         return get_server_audio_url(song["video_id"], wait_sec)
     return create_long_presigned_url(song["key"])
@@ -221,9 +233,10 @@ def state_key(handler_input):
     return "State/{}.json".format(hashlib.sha256(user_id.encode()).hexdigest()[:32])
 
 
-def make_order(shuffle, first=None):
-    """再生順(曲idのリスト)を作る。シャッフル時は first を先頭にできる"""
-    order = list(SONG_IDS)
+def make_order(shuffle, first=None, ids=None):
+    """再生順(曲idのリスト)を作る。ids を省略すると、曲リスト全曲。
+    シャッフル時は first を先頭にできる"""
+    order = list(SONG_IDS if ids is None else ids)
     if shuffle:
         random.shuffle(order)
         if first in order:
@@ -233,6 +246,7 @@ def make_order(shuffle, first=None):
 
 
 def load_state(handler_input):
+    global QUEUE_SONGS
     try:
         obj = s3_client.get_object(Bucket=BUCKET, Key=state_key(handler_input))
         state = json.loads(obj["Body"].read())
@@ -240,11 +254,28 @@ def load_state(handler_input):
         logger.info("状態を読み込めませんでした(初回の可能性): %s", e)
         state = {}
     state.setdefault("shuffle", False)
-    state.setdefault("loop", "all")   # "off" | "all" | "one"
+    state.setdefault("songs", {})     # 検索で見つけた曲の情報 {id: {...}}
     # 曲リストを変更した場合などは、再生順を作り直す
-    if sorted(state.get("order", [])) != sorted(SONG_IDS):
-        state["order"] = make_order(state["shuffle"])
+    order = state.get("order", [])
+    if state["songs"]:
+        ok = bool(order) and set(order) <= set(SONG_IDS) | set(state["songs"])
+    else:
+        ok = sorted(order) == sorted(SONG_IDS)
+    if not ok:
+        reset_to_library(state)
+    QUEUE_SONGS = state["songs"]
     return state
+
+
+def reset_to_library(state):
+    """再生キューを、曲リストの全曲に戻す"""
+    state["songs"], state["base"] = {}, None
+    state["order"] = make_order(state["shuffle"])
+
+
+def queue_base(state):
+    """シャッフルをオフにしたときの並び(検索のキューなら、見つかった順)"""
+    return state.get("base") or list(SONG_IDS)
 
 
 def save_state(handler_input, state):
@@ -262,7 +293,7 @@ def save_state(handler_input, state):
 def next_song(state, current, manual):
     """次に再生する曲のidを返す。再生を終えるべきときは None。
     manual=True は「次の曲」と言われた場合(最後の曲でも先頭へ戻る)"""
-    if state["loop"] == "one" and not manual and current in SONGS:
+    if state["loop"] == "one" and not manual and get_song(current):
         return current
     order = state["order"]
     pos = order.index(current) if current in order else -1
@@ -272,7 +303,7 @@ def next_song(state, current, manual):
     if state["loop"] == "off" and not manual:
         return None
     if state["shuffle"]:  # 一周したら並べ直す(直前の曲が先頭に来ないようにする)
-        new_order = make_order(True)
+        new_order = make_order(True, ids=order)
         if len(new_order) > 1 and new_order[0] == current:
             new_order[0], new_order[1] = new_order[1], new_order[0]
         state["order"] = new_order
@@ -297,7 +328,7 @@ def parse_song_id(token):
     if not token:
         return None
     song_id = token.split(".")[0]
-    return song_id if song_id in SONGS else None
+    return song_id if get_song(song_id) else None
 
 
 def current_song_id(handler_input):
@@ -306,12 +337,14 @@ def current_song_id(handler_input):
 
 
 def build_metadata(song_id):
-    song = SONGS[song_id]
+    song = get_song(song_id)
     image = None
-    if song.get("art"):
+    art_url = song.get("art_url") or (
+        create_long_presigned_url(song["art"]) if song.get("art") else None)
+    if art_url:
         image = Image(
             content_description=song["title"],
-            sources=[ImageInstance(url=create_long_presigned_url(song["art"]))])
+            sources=[ImageInstance(url=art_url)])
     return AudioItemMetadata(
         title=song["title"],
         subtitle=song.get("subtitle") or None,
@@ -342,32 +375,51 @@ NOT_READY_SPEECH = {
 
 def prefetch_next(handler_input, song_id):
     """再生順で次の曲がサーバーの曲なら、先に用意させる(1曲だけ)"""
-    if not any(s["source"] == "server" for s in LIBRARY):
+    if not (QUEUE_SONGS or any(s["source"] == "server" for s in LIBRARY)):
         return
     try:
         order = load_state(handler_input)["order"]
         if song_id not in order:
             return
-        nxt = SONGS.get(order[(order.index(song_id) + 1) % len(order)])
+        nxt = get_song(order[(order.index(song_id) + 1) % len(order)])
         if nxt and nxt["id"] != song_id and nxt["source"] == "server":
             prefetch_server_song(nxt["video_id"])
     except Exception as e:
         logger.info("先読みをスキップ: %s", e)
 
 
-def play_track(handler_input, speech, song_id, offset=0):
+def speech_title(title):
+    """曲名を読み上げ用に整える(【】[]の中身を除き、長いときは切り、SSML用に変換する)"""
+    t = re.sub(r"【[^】]*】|\[[^\]]*\]", "", title or "").strip() or (title or "")
+    return xml_escape(t[:25])
+
+
+def play_track(handler_input, speech, song_id, offset=0,wait_sec=PLAY_WAIT_SEC, prefetch=True):
     builder = handler_input.response_builder
-    try:
-        directive = build_play_directive(
-            song_id, PlayBehavior.REPLACE_ALL, offset=offset)
-    except StreamNotReady as e:
-        # 再生指示は出さない(今流れている曲があれば、そのまま続く)
-        msg = NOT_READY_SPEECH.get(e.status, "再生できませんでした。").format(
-            SONGS[song_id]["title"])
-        return builder.speak(msg).set_should_end_session(True).response
+    skipped = 0
+    while True:
+        try:
+            directive = build_play_directive(
+                song_id, PlayBehavior.REPLACE_ALL, offset=offset, wait_sec=wait_sec)
+            break
+        except StreamNotReady as e:
+            # 取得に失敗した曲(ログインが必要な動画など)は飛ばして、次の曲を試す(2曲まで)
+            if e.status == "error" and skipped < 2:
+                nxt = next_song(load_state(handler_input), song_id, True)
+                if nxt and nxt != song_id:
+                    skipped += 1
+                    speech = "取得できない曲があったので、{}を再生します。".format(
+                        speech_title(get_song(nxt)["title"]))
+                    song_id, offset = nxt, 0
+                    continue
+            # 再生指示は出さない(今流れている曲があれば、そのまま続く)
+            msg = NOT_READY_SPEECH.get(e.status, "再生できませんでした。").format(
+                speech_title(get_song(song_id)["title"]))
+            return builder.speak(msg).set_should_end_session(True).response
     if speech:
         builder.speak(speech)
-    prefetch_next(handler_input, song_id)
+    if prefetch:
+        prefetch_next(handler_input, song_id)
     return builder.add_directive(directive).set_should_end_session(True).response
 
 
@@ -376,6 +428,14 @@ def normalize(text):
     t = "".join(unicodedata.normalize("NFKC", text or "").split()).lower()
     t = t.translate(str.maketrans("〇一二三四五六七八九", "0123456789"))
     return "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in t)
+
+
+def clean_query(text):
+    """検索語の前後に混ざった「ニコプレーヤーで」「〜を流して」などを取り除く"""
+    t = (text or "").strip()
+    t = re.sub(r"^ニコプレーヤー(で|に|を|は)?\s*", "", t)
+    t = re.sub(r"\s*(を|の曲を|の曲)?\s*(流して|かけて|再生して|聞きたい|聞かせて)(ください)?$", "", t)
+    return t.strip()
 
 
 GENERIC_WORDS = {"音楽", "曲", "何か", "なにか", "ミュージック", "おんがく"}
@@ -425,6 +485,38 @@ def search_songs(query):
     return [sid for score, sid in scored if score == top]   # 最高点の曲だけを返す
 
 
+def format_count(n):
+    return "{:.1f}万".format(n / 10000).replace(".0万", "万") if n >= 10000 else str(n)
+
+
+def make_subtitle(views, duration):
+    """Echo Showのサブタイトル(投稿者名は検索APIでは取れないので、再生時間と再生数)"""
+    parts = []
+    if isinstance(duration, int) and duration > 0:
+        parts.append("{}:{:02d}".format(duration // 60, duration % 60))
+    if isinstance(views, int):
+        parts.append("再生 " + format_count(views))
+    return " / ".join(parts)
+
+
+def search_server(query):
+    """サーバー(ニコニコ)で検索して、キューに入れる曲の情報を返す。失敗したら例外"""
+    res = server_get(
+        "/api/search?" + urllib.parse.urlencode({"q": query, "limit": SEARCH_LIMIT}),
+        SEARCH_TIMEOUT)
+    songs = []
+    for d in res.get("results", []):
+        vid = d.get("id")
+        if not (isinstance(vid, str) and VIDEO_ID_RE.fullmatch(vid)):
+            continue
+        songs.append({
+            "id": vid, "video_id": vid, "source": "server",
+            "title": d.get("title") or vid,
+            "subtitle": d.get("uploader") or make_subtitle(d.get("views"), d.get("duration")),
+            "art_url": d.get("thumbnail")})
+    return songs
+
+
 # ---------------------------------------------------------------
 # ハンドラ
 # ---------------------------------------------------------------
@@ -436,7 +528,7 @@ class StartPlaybackHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         state = load_state(handler_input)
-        state["order"] = make_order(state["shuffle"])
+        reset_to_library(state)
         save_state(handler_input, state)
         speech = "シャッフルで再生します。" if state["shuffle"] else "再生します。"
         return play_track(handler_input, speech, state["order"][0])
@@ -450,8 +542,8 @@ class SearchPlayIntentHandler(AbstractRequestHandler):
     def handle(self, handler_input):
         slots = handler_input.request_envelope.request.intent.slots or {}
         slot = slots.get("query")
-        query = slot.value if slot else None
-        logger.info("query: %r", query)
+        query = clean_query(slot.value) if slot else None
+        logger.info("query: %r (元: %r)", query, slot.value if slot else None)
         builder = handler_input.response_builder
 
         if query and normalize(query) in CANCEL_WORDS:
@@ -465,26 +557,46 @@ class SearchPlayIntentHandler(AbstractRequestHandler):
 
         # 「音楽をかけて」のような一般的な言葉は、全曲再生にする
         if normalize(query) in GENERIC_WORDS:
-            state["order"] = make_order(state["shuffle"])
+            reset_to_library(state)
             save_state(handler_input, state)
             return play_track(handler_input, "再生します。", state["order"][0])
 
         hits = search_songs(query)
-        if not hits:
+        if hits:
+            # 見つかった曲を先頭に、残りの曲をそのあとに並べる
+            rest = [s for s in make_order(state["shuffle"]) if s not in hits]
+            state["songs"], state["base"] = {}, None
+            state["order"] = hits + rest
+            save_state(handler_input, state)
+
+            title = SONGS[hits[0]]["title"]
+            if len(hits) == 1:
+                speech = "{}を再生します。".format(title)
+            else:
+                speech = "{}曲見つかりました。{}から再生します。".format(len(hits), title)
+            return play_track(handler_input, speech, hits[0])
+
+        # 曲リストになければ、サーバー(ニコニコ)で検索する
+        try:
+            found = search_server(query)
+        except Exception as e:
+            logger.error("サーバー検索に失敗: %s", e)
+            return (builder.speak("検索サーバーに接続できません。")
+                    .set_should_end_session(True).response)
+        if not found:
             return elicit_query(
                 builder, "{}は見つかりませんでした。もう一度、曲名を言ってください。".format(query))
 
-        # 見つかった曲を先頭に、残りの曲をそのあとに並べる
-        rest = [s for s in make_order(state["shuffle"]) if s not in hits]
-        state["order"] = hits + rest
+        # 見つかった曲(再生数の多い順)を、曲の情報ごと再生キューに入れる
+        ids = [s["id"] for s in found]
+        state["songs"] = {s["id"]: s for s in found}
+        state["base"] = ids
+        state["order"] = make_order(state["shuffle"], first=ids[0], ids=ids)
         save_state(handler_input, state)
-
-        title = SONGS[hits[0]]["title"]
-        if len(hits) == 1:
-            speech = "{}を再生します。".format(title)
-        else:
-            speech = "{}曲見つかりました。{}から再生します。".format(len(hits), title)
-        return play_track(handler_input, speech, hits[0])
+        speech = "{}から再生します。".format(speech_title(found[0]["title"]))
+        # 上位の曲は、サーバーが検索の時点で先に取得し始めている
+        return play_track(handler_input, speech, ids[0],
+                            wait_sec=SEARCH_PLAY_WAIT_SEC, prefetch=False)
 
 
 class ResumeIntentHandler(AbstractRequestHandler):
@@ -493,13 +605,11 @@ class ResumeIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         audio = handler_input.request_envelope.context.audio_player
+        state = load_state(handler_input)   # 検索で見つけた曲を読み込むため、先に呼ぶ
         song_id = current_song_id(handler_input)
         if song_id is None:
-            song_id = load_state(handler_input)["order"][0]
+            song_id = state["order"][0]
             offset = 0
-        else:
-            offset = (audio.offset_in_milliseconds or 0) if audio else 0
-        return play_track(handler_input, "再開します。", song_id, offset)
 
 
 class StopHandler(AbstractRequestHandler):
@@ -565,7 +675,7 @@ class PlaybackModeHandler(AbstractRequestHandler):
         state[key] = value
         song_id = current_song_id(handler_input)
         if key == "shuffle":  # 今の曲を先頭にして、順番を作り直す
-            state["order"] = make_order(value, first=song_id)
+            state["order"] = make_order(value, first=song_id, ids=queue_base(state))
         save_state(handler_input, state)
 
         builder = handler_input.response_builder.speak(speech)
