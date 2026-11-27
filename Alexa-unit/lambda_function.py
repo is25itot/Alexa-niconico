@@ -418,6 +418,14 @@ def normalize(text):
     return "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in t)
 
 
+def clean_query(text):
+    """検索語の前後に混ざった「ニコプレーヤーで」「〜を流して」などを取り除く"""
+    t = (text or "").strip()
+    t = re.sub(r"^ニコプレーヤー(で|に|を|は)?\s*", "", t)
+    t = re.sub(r"\s*(を|の曲を|の曲)?\s*(流して|かけて|再生して|聞きたい|聞かせて)(ください)?$", "", t)
+    return t.strip()
+
+
 GENERIC_WORDS = {"音楽", "曲", "何か", "なにか", "ミュージック", "おんがく"}
 CANCEL_WORDS = {
     "やめて", "やめる", "キャンセル", "中止", "ちゅうし",
@@ -522,8 +530,8 @@ class SearchPlayIntentHandler(AbstractRequestHandler):
     def handle(self, handler_input):
         slots = handler_input.request_envelope.request.intent.slots or {}
         slot = slots.get("query")
-        query = slot.value if slot else None
-        logger.info("query: %r", query)
+        query = clean_query(slot.value) if slot else None
+        logger.info("query: %r (元: %r)", query, slot.value if slot else None)
         builder = handler_input.response_builder
 
         if query and normalize(query) in CANCEL_WORDS:
