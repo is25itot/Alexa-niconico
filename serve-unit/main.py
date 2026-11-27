@@ -14,19 +14,62 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 
+
 CACHE_DIR = Path(os.environ.get("CACHE_DIR", "/srv/audio"))
 API_KEY = os.environ["API_KEY"]
 SIGN_SECRET = os.environ["SIGN_SECRET"].encode()
 BASE_URL = os.environ["BASE_URL"].rstrip("/")
 URL_TTL = int(os.environ.get("URL_TTL", 6 * 3600))  # 署名付きURLの有効秒数
 
+
 VIDEO_ID_RE = re.compile(r"^(sm|nm|so)?\d{1,12}$")
 YTDLP = [sys.executable, "-m", "yt_dlp"]
+
+
+# --- ブラックリスト(ログインが必要・削除済みなど、取得できない動画) ---
+BLOCKLIST_FILE = Path(os.environ.get(
+    "BLOCKLIST_FILE", str(Path(__file__).resolve().parent / "blocked.json")))
+# 取得失敗のうち、このパターンに当たるものだけを登録する(通信の失敗や変換の失敗は登録しない)
+PERMANENT_ERROR_RE = re.compile(
+    r"login required|sensitive content|premium|payment|members? only|"
+    r"video (is )?(unavailable|not available|private|deleted|removed)|"
+    r"(has been|was) (deleted|removed)|http error (404|410)",
+    re.I,
+)
+
+
+def load_blocked():
+    try:
+        return json.loads(BLOCKLIST_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        print(f"blocklist read failed: {e}", file=sys.stderr)
+        return {}
+
+
+blocked = load_blocked()  # 動画ID -> {"reason": ..., "at": ...}
+
+
+def save_blocked():
+    try:
+        tmp = BLOCKLIST_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(blocked, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(BLOCKLIST_FILE)
+    except Exception as e:  # 書けなくてもメモリ上では有効
+        print(f"blocklist write failed: {e}", file=sys.stderr)
+
+
+def add_blocked(video_id: str, reason: str):
+    blocked[video_id] = {"reason": reason.strip()[-200:], "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    save_blocked()
+
 
 app = FastAPI()
 semaphore = asyncio.Semaphore(1)  # 同時に取得する本数
 tasks = {}   # 動画ID -> 実行中のタスク
 errors = {}  # 動画ID -> 直近のエラー内容
+
 
 # --- 検索(ニコニコのスナップショット検索API v2) ---
 SEARCH_URL = "https://snapshot.search.nicovideo.jp/api/v2/snapshot/video/contents/search"
@@ -84,6 +127,8 @@ async def download(video_id: str):
             errors.pop(video_id, None)
         else:
             errors[video_id] = err.decode(errors="replace")[-500:]
+            if PERMANENT_ERROR_RE.search(errors[video_id]):
+                add_blocked(video_id, errors[video_id])  # 見られない動画は、次回から試さない
             for p in CACHE_DIR.glob(f".tmp-{video_id}.*"):
                 p.unlink(missing_ok=True)
 
@@ -97,6 +142,8 @@ async def prepare(video_id: str, x_api_key: str = Header(default=None)):
     task = tasks.get(video_id)
     if task is None or task.done():
         errors.pop(video_id, None)
+        if video_id in blocked:
+            return {"status": "error", "detail": "blocked: " + blocked[video_id]["reason"]}
         tasks[video_id] = asyncio.create_task(download(video_id))
         return {"status": "processing"}
     return {"status": "processing"}
@@ -108,6 +155,8 @@ async def status(video_id: str, x_api_key: str = Header(default=None)):
     check_video_id(video_id)
     if (CACHE_DIR / f"{video_id}.mp3").exists():
         return {"status": "ready", "url": make_url(video_id)}
+    if video_id in blocked:
+        return {"status": "error", "detail": "blocked: " + blocked[video_id]["reason"]}
     if video_id in errors:
         return {"status": "error", "detail": errors[video_id]}
     task = tasks.get(video_id)
@@ -173,7 +222,7 @@ async def fill_uploaders(items):
 
 def ensure_download(video_id: str):
     """まだ保存も取得中でもなければ、取得を始める(prepare と同じ動き)"""
-    if (CACHE_DIR / f"{video_id}.mp3").exists():
+    if (CACHE_DIR / f"{video_id}.mp3").exists() or video_id in blocked:
         return
     task = tasks.get(video_id)
     if task is None or task.done():
@@ -219,13 +268,30 @@ async def search(q: str, limit: int = 10, prefetch: int = PREFETCH_TOP,
         await fill_uploaders(results)
         search_cache[key] = (time.time(), results)
 
-    # 取得に失敗した動画(センシティブ設定でログインが必要な動画など)は、結果から除く
-    results = [r for r in results if r["id"] not in errors]
+    # ブラックリストの動画(ログインが必要な動画など)は、結果から除く
+    results = [r for r in results if r["id"] not in blocked]
 
     # 上位の曲は、先に取得を始めておく(Alexaの待ち時間を減らすため)
     for item in results[:max(0, min(prefetch, 3))]:
         ensure_download(item["id"])
     return {"results": results}
+
+
+@app.get("/api/blocked")
+async def list_blocked(x_api_key: str = Header(default=None)):
+    require_api_key(x_api_key)
+    return blocked
+
+
+@app.delete("/api/blocked/{video_id}")
+async def unblock(video_id: str, x_api_key: str = Header(default=None)):
+    require_api_key(x_api_key)
+    check_video_id(video_id)
+    removed = blocked.pop(video_id, None) is not None
+    if removed:
+        save_blocked()
+        errors.pop(video_id, None)
+    return {"removed": removed}
 
 
 @app.api_route("/audio/{filename}", methods=["GET", "HEAD"])
