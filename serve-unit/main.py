@@ -219,6 +219,9 @@ async def search(q: str, limit: int = 10, prefetch: int = PREFETCH_TOP,
         await fill_uploaders(results)
         search_cache[key] = (time.time(), results)
 
+    # 取得に失敗した動画(センシティブ設定でログインが必要な動画など)は、結果から除く
+    results = [r for r in results if r["id"] not in errors]
+
     # 上位の曲は、先に取得を始めておく(Alexaの待ち時間を減らすため)
     for item in results[:max(0, min(prefetch, 3))]:
         ensure_download(item["id"])

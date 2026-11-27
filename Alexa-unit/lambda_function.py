@@ -394,16 +394,28 @@ def speech_title(title):
     return xml_escape(t[:25])
 
 
-def play_track(handler_input, speech, song_id, offset=0,
-                wait_sec=PLAY_WAIT_SEC, prefetch=True):
+def play_track(handler_input, speech, song_id, offset=0,wait_sec=PLAY_WAIT_SEC, prefetch=True):
     builder = handler_input.response_builder
-    try:
-        directive = build_play_directive(
-            song_id, PlayBehavior.REPLACE_ALL, offset=offset, wait_sec=wait_sec)
-    except StreamNotReady as e:
-        # 再生指示は出さない(今流れている曲があれば、そのまま続く)
-        msg = NOT_READY_SPEECH.get(e.status, "再生できませんでした。").format(speech_title(get_song(song_id)["title"]))
-        return builder.speak(msg).set_should_end_session(True).response
+    skipped = 0
+    while True:
+        try:
+            directive = build_play_directive(
+                song_id, PlayBehavior.REPLACE_ALL, offset=offset, wait_sec=wait_sec)
+            break
+        except StreamNotReady as e:
+            # 取得に失敗した曲(ログインが必要な動画など)は飛ばして、次の曲を試す(2曲まで)
+            if e.status == "error" and skipped < 2:
+                nxt = next_song(load_state(handler_input), song_id, True)
+                if nxt and nxt != song_id:
+                    skipped += 1
+                    speech = "取得できない曲があったので、{}を再生します。".format(
+                        speech_title(get_song(nxt)["title"]))
+                    song_id, offset = nxt, 0
+                    continue
+            # 再生指示は出さない(今流れている曲があれば、そのまま続く)
+            msg = NOT_READY_SPEECH.get(e.status, "再生できませんでした。").format(
+                speech_title(get_song(song_id)["title"]))
+            return builder.speak(msg).set_should_end_session(True).response
     if speech:
         builder.speak(speech)
     if prefetch:
