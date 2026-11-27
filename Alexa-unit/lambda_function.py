@@ -79,7 +79,7 @@ def get_song(song_id):
 
 
 # ---------------------------------------------------------------
-# 音声サーバー(URLとAPIキーは S3 の Config/server.json に置く。コードには書かない)
+# 音声サーバー
 #   {"base_url": "https://<ドメイン>.duckdns.org", "api_key": "..."}
 # ---------------------------------------------------------------
 SERVER_CONFIG_KEY = "Config/server.json"
@@ -90,6 +90,16 @@ ENQUEUE_WAIT_SEC = 2    # 次の曲の予約のとき
 SEARCH_LIMIT = 10           # サーバー検索で、キューに入れる曲数
 SEARCH_TIMEOUT = 4          # 検索APIを待つ秒数
 SEARCH_PLAY_WAIT_SEC = 2    # 検索のあと、最初の曲の準備を待つ秒数
+
+# エンドレス再生(検索したキーワードの曲を、キューの残りが少なくなるたびに足していく)
+RADIO_PAGE_SIZE = 10        # 1回に足す曲数(= SEARCH_LIMIT)
+RADIO_POOL_PAGES = 20       # 再生数の多い上位 10曲 x 20ページ = 200曲 から選ぶ
+REFILL_THRESHOLD = 3        # 現在の曲のあとに残る曲が、これ以下になったら足す
+REFILL_TIMEOUT = 3          # 足すときの検索を待つ秒数
+MAX_QUEUE = 40              # キューがこれを超えたら、再生済みの古い曲を捨てる
+KEEP_HISTORY = 10           # 捨てるとき、「前の曲」用に残す曲数
+RECENT_LIMIT = 100          # 直近に出した曲(重複を避ける)の記憶数
+
 _server_cfg = None
 _server_cfg_loaded_at = 0
 
@@ -255,6 +265,7 @@ def load_state(handler_input):
         state = {}
     state.setdefault("shuffle", False)
     state.setdefault("songs", {})     # 検索で見つけた曲の情報 {id: {...}}
+    state.setdefault("radio", None)   # エンドレス再生の情報(キーワードなど)
     # 曲リストを変更した場合などは、再生順を作り直す
     order = state.get("order", [])
     if state["songs"]:
@@ -269,7 +280,7 @@ def load_state(handler_input):
 
 def reset_to_library(state):
     """再生キューを、曲リストの全曲に戻す"""
-    state["songs"], state["base"] = {}, None
+    state["songs"], state["base"], state["radio"] = {}, None, None
     state["order"] = make_order(state["shuffle"])
 
 
@@ -499,11 +510,12 @@ def make_subtitle(views, duration):
     return " / ".join(parts)
 
 
-def search_server(query):
+def search_server(query, offset=0, prefetch=None, timeout=SEARCH_TIMEOUT):
     """サーバー(ニコニコ)で検索して、キューに入れる曲の情報を返す。失敗したら例外"""
-    res = server_get(
-        "/api/search?" + urllib.parse.urlencode({"q": query, "limit": SEARCH_LIMIT}),
-        SEARCH_TIMEOUT)
+    params = {"q": query, "limit": SEARCH_LIMIT, "offset": offset}
+    if prefetch is not None:
+        params["prefetch"] = prefetch
+    res = server_get("/api/search?" + urllib.parse.urlencode(params), timeout)
     songs = []
     for d in res.get("results", []):
         vid = d.get("id")
@@ -515,6 +527,59 @@ def search_server(query):
             "subtitle": d.get("uploader") or make_subtitle(d.get("views"), d.get("duration")),
             "art_url": d.get("thumbnail")})
     return songs
+
+
+def pick_next_page(radio, shuffle):
+    """次に足すページを選ぶ。シャッフル中は未使用のページからランダム、そうでなければ順番どおり"""
+    if len(radio["used"]) >= RADIO_POOL_PAGES:   # 一巡したら、最初から
+        radio["used"] = []
+    candidates = [p for p in range(RADIO_POOL_PAGES) if p not in radio["used"]]
+    return random.choice(candidates) if shuffle else candidates[0]
+
+
+def trim_queue(state, current_id):
+    """キューが長くなりすぎたら、再生済みの古い曲を捨てる"""
+    order = state["order"]
+    if len(order) <= MAX_QUEUE or current_id not in order:
+        return
+    state["order"] = order[max(0, order.index(current_id) - KEEP_HISTORY):]
+    keep = set(state["order"])
+    for sid in [k for k in state["songs"] if k not in keep]:
+        del state["songs"][sid]
+    state["base"] = [i for i in (state.get("base") or []) if i in keep]
+
+
+def refill_radio(state, current_id):
+    """エンドレス再生: キューの残りが少なくなったら、同じキーワードの曲を足す。足したら True"""
+    radio = state.get("radio")
+    if not radio or state["loop"] == "one" or current_id not in state["order"]:
+        return False
+    order = state["order"]
+    if len(order) - order.index(current_id) - 1 > REFILL_THRESHOLD:
+        return False
+    page = pick_next_page(radio, state["shuffle"])
+    try:
+        # 先読みはこちらで行うので、サーバーには頼まない(prefetch=0)
+        found = search_server(radio["q"], offset=page * RADIO_PAGE_SIZE, prefetch=0, timeout=REFILL_TIMEOUT)
+    except Exception as e:
+        logger.warning("曲を足せませんでした: %s", e)
+        return False
+    radio["used"].append(page)
+    recent = set(radio["recent"])
+    new = [s for s in found if s["id"] not in recent and s["id"] not in state["songs"]]
+    if not new:
+        return False
+    if state["shuffle"]:
+        random.shuffle(new)
+    ids = [s["id"] for s in new]
+    for s in new:
+        state["songs"][s["id"]] = s
+    state["order"] = order + ids
+    state["base"] = (state.get("base") or []) + ids
+    radio["recent"] = (radio["recent"] + ids)[-RECENT_LIMIT:]
+    trim_queue(state, current_id)
+    logger.info("曲を足しました: page=%d +%d曲 (キュー %d曲)", page, len(ids), len(state["order"]))
+    return True
 
 
 # ---------------------------------------------------------------
@@ -591,7 +656,7 @@ class SearchPlayIntentHandler(AbstractRequestHandler):
         ids = [s["id"] for s in found]
         state["songs"] = {s["id"]: s for s in found}
         state["base"] = ids
-        state["order"] = make_order(state["shuffle"], first=ids[0], ids=ids)
+        state["radio"] = {"q": query, "used": [0], "recent": ids}   # 以降、このキーワードの曲を足し続ける
         save_state(handler_input, state)
         speech = "{}から再生します。".format(speech_title(found[0]["title"]))
         # 上位の曲は、サーバーが検索の時点で先に取得し始めている
@@ -632,7 +697,9 @@ class NextIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         state = load_state(handler_input)
-        song_id = next_song(state, current_song_id(handler_input), manual=True)
+        current = current_song_id(handler_input)
+        refill_radio(state, current)
+        song_id = next_song(state, current, manual=True)
         save_state(handler_input, state)
         return play_track(handler_input, None, song_id)
 
@@ -700,7 +767,9 @@ class NearlyFinishedHandler(AbstractRequestHandler):
     def handle(self, handler_input):
         current_token = handler_input.request_envelope.request.token
         state = load_state(handler_input)
-        song_id = next_song(state, parse_song_id(current_token), manual=False)
+        current = parse_song_id(current_token)
+        refill_radio(state, current)   # 残りが少なければ、同じキーワードの曲を足す
+        song_id = next_song(state, current, manual=False)
         save_state(handler_input, state)
         if song_id is None:  # ループなしで最後の曲まで来た → 予約せず、そのまま終了
             return handler_input.response_builder.response

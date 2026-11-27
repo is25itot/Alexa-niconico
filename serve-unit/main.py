@@ -164,7 +164,7 @@ async def status(video_id: str, x_api_key: str = Header(default=None)):
     return {"status": "processing" if task and not task.done() else "none"}
 
 
-def snapshot_search(q: str, limit: int):
+def snapshot_search(q: str, limit: int, offset: int = 0):
     """検索APIを呼ぶ(待ち時間のある処理なので、別スレッドで実行する)"""
     params = [
         ("q", q),
@@ -174,6 +174,7 @@ def snapshot_search(q: str, limit: int):
         ("filters[lengthSeconds][lte]", str(SEARCH_MAX_LEN)),
         ("_sort", "-viewCounter"),
         ("_limit", str(limit)),
+        ("_offset", str(offset)),      # ← 追加
         ("_context", SEARCH_CONTEXT),
     ]
     req = urllib.request.Request(
@@ -232,16 +233,16 @@ def ensure_download(video_id: str):
 
 
 @app.get("/api/search")
-async def search(q: str, limit: int = 10, prefetch: int = PREFETCH_TOP,
-                    x_api_key: str = Header(default=None)):
+async def search(q: str, limit: int = 10, offset: int = 0, prefetch: int = PREFETCH_TOP, x_api_key: str = Header(default=None)):
     global last_search
     require_api_key(x_api_key)
     q = q.strip()
     if not q or len(q) > 100:
         raise HTTPException(status_code=400, detail="invalid query")
     limit = max(1, min(limit, 20))
+    offset = max(0, min(offset, 1000))
 
-    key = (q, limit)
+    key = (q, limit, offset)
     cached = search_cache.get(key)
     if cached and time.time() - cached[0] < SEARCH_CACHE_TTL:
         results = cached[1]
@@ -252,7 +253,7 @@ async def search(q: str, limit: int = 10, prefetch: int = PREFETCH_TOP,
                 await asyncio.sleep(wait)
             last_search = time.time()
             try:
-                data = await asyncio.to_thread(snapshot_search, q, limit)
+                data = await asyncio.to_thread(snapshot_search, q, limit, offset)
             except Exception as e:
                 raise HTTPException(status_code=502, detail=f"search failed: {e}")
         results = [
